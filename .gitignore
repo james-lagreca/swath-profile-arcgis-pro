@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Results and scratch produced by running the tool
+swath_results/
+scratch/
+*.swath.npz
+*.tmp.npz
+*.lock
+
+# Toolbox-level metadata stub that ArcGIS Pro rewrites on every open.
+# The tool-level help file (SwathProfile.SwathProfileTool.pyt.xml) IS tracked.
+SwathProfile.pyt.xml
+
+# Local editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

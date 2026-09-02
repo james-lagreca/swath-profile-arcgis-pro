@@ -1,0 +1,24 @@
+name: tests
+
+# The numerical core, transforms, ridgeline figure and chart JSON need no
+# ArcGIS; they run here on every push.  The arcpy-dependent tests (raster
+# reading, writers, the tool itself) run locally with the ArcGIS Pro
+# interpreter - see README "Tests".
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: python -m pip install --upgrade pip numpy scipy matplotlib pytest
+      - name: Run arcpy-free tests
+        env:
+          MPLBACKEND: Agg
+        run: python -m pytest tests/test_core.py tests/test_transforms.py -q

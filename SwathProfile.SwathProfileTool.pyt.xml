@@ -1,0 +1,435 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata xml:lang="en">
+    <Esri>
+        <CreaDate>20260902</CreaDate>
+        <CreaTime>17234500</CreaTime>
+        <ArcGISFormat>1.0</ArcGISFormat>
+        <SyncOnce>TRUE</SyncOnce>
+        <ModDate>20260902</ModDate>
+        <ModTime>172345</ModTime>
+    </Esri>
+    <tool name="SwathProfileTool" displayname="Swath Profile" toolboxalias="swathprofile" xmlns="">
+        <arcToolboxHelpPath>c:\program files\arcgis\pro\Resources\Help\gp</arcToolboxHelpPath>
+        <parameters>
+            <param name="draw_lines" displayname="Draw Baseline on Map" type="Optional" direction="Input" datatype="Feature Set" expression="{draw_lines}">
+                <dialogReference>
+                    <para>Draw one or more baselines directly on the map.</para>
+                    <para>Click the sketch tool beside this parameter, then click along the map to draw a line and double-click to finish. Each sketched line becomes a profile. Sketched lines are labelled 'sketch 1', 'sketch 2', ... and get OIDs from 1000000 upward so they never collide with a layer's features.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Draw one or more baselines directly on the map.</para>
+                </pythonReference>
+            </param>
+            <param name="in_lines" displayname="...or Baseline Layer" type="Optional" direction="Input" datatype="Feature Layer" expression="{in_lines}">
+                <dialogReference>
+                    <para>Existing line features to use as baselines.</para>
+                    <para>Any polyline layer, in any coordinate system. If features are selected on the map, only the selection is processed. Multipart features are profiled part by part (see Multipart Handling).</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Existing line features to use as baselines.</para>
+                </pythonReference>
+            </param>
+            <param name="label_field" displayname="Baseline Label Field" type="Optional" direction="Input" datatype="Field" expression="{label_field}">
+                <dialogReference>
+                    <para>Text field of the baseline layer whose value names each profile.</para>
+                    <para>Carried into every output as LINE_NAME and shown as the profile's name in the chart window. Leave empty to use the feature's OID.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Text field of the baseline layer whose value names each profile.</para>
+                </pythonReference>
+            </param>
+            <param name="in_rasters" displayname="Raster(s) - DEM first" type="Required" direction="Input" datatype="Multiple Value" expression="in_rasters;in_rasters...">
+                <dialogReference>
+                    <para>Raster(s) to profile. The first is the primary (DEM).</para>
+                    <para>Each raster gets its own panel in the chart. The first raster defines the default step size (1.5 x its cell size) and the working coordinate system when it is projected. Rasters must be single band; pick a band explicitly for multiband data, e.g. dem.tif\Band_1.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Raster(s) to profile. The first is the primary (DEM).</para>
+                </pythonReference>
+            </param>
+            <param name="swath_width" displayname="Swath Width (total)" type="Required" direction="Input" datatype="Linear Unit" expression="swath_width">
+                <dialogReference>
+                    <para>Total width of the band, centred on the baseline.</para>
+                    <para>This is the full width, not a half-width. A 2000 m swath samples 1000 m on each side of the line. Wider bands average out more drainage noise; on a curved baseline a band cannot follow bends tighter than its half-width without folding onto itself (see Tight-Bend Handling).</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Total width of the band, centred on the baseline.</para>
+                </pythonReference>
+            </param>
+            <param name="out_table" displayname="Output Statistics Table" type="Optional" direction="Output" datatype="Table" expression="{out_table}">
+                <dialogReference>
+                    <para>The per-station statistics table (long format: one row per baseline, raster and station).</para>
+                    <para>Fields include DIST, Z_MIN, Z_MAX, Z_MEAN, Z_MEDIAN, Z_Q1, Z_Q3, Z_PLO, Z_PHI (the chosen percentiles), RELIEF, HI, THI, THI_RAW, THI_STAR, N_VALID, KAPPA and FOLDED. Defaults to swath_results.gdb in the project folder, named from the baseline layer and a timestamp; existing outputs are never overwritten. Outputs deliberately avoid the project's own geodatabase: writing into a geodatabase with unsaved edits waits until you save them.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>The per-station statistics table (long format: one row per baseline, raster and station).</para>
+                </pythonReference>
+            </param>
+            <param name="transect_source" displayname="Trace to Place Transects Along" type="Optional" direction="Input" datatype="Feature Layer" expression="{transect_source}">
+                <dialogReference>
+                    <para>A fault trace (or any line) along which perpendicular transects are generated and profiled.</para>
+                    <para>Use this for a systematic set of swaths across a structure. Transects are placed every Transect Spacing along the trace, each Transect Length long, numbered T001, T002, ... and written to the Transects output. They are profiled in addition to any drawn or layer baselines.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>A fault trace (or any line) along which perpendicular transects are generated and profiled.</para>
+                </pythonReference>
+            </param>
+            <param name="transect_spacing" displayname="Transect Spacing" type="Optional" direction="Input" datatype="Linear Unit" expression="{transect_spacing}">
+                <dialogReference>
+                    <para>Distance between successive transects along the trace.</para>
+                    <para>Bands of adjacent transects overlap when the spacing is less than the swath width; that is allowed and the tool says so.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Distance between successive transects along the trace.</para>
+                </pythonReference>
+            </param>
+            <param name="transect_length" displayname="Transect Length (total)" type="Optional" direction="Input" datatype="Linear Unit" expression="{transect_length}">
+                <dialogReference>
+                    <para>Total length of each transect.</para>
+                    <para>Make it longer than the feature you want to see across strike. The band is Swath Width wide along the whole transect.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Total length of each transect.</para>
+                </pythonReference>
+            </param>
+            <param name="transect_width" displayname="Transect Swath Width (blank = Swath Width)" type="Optional" direction="Input" datatype="Linear Unit" expression="{transect_width}">
+                <dialogReference>
+                    <para>Swath width for the transects, when it should differ from the main Swath Width.</para>
+                    <para>Leave blank to use the same width as drawn or layer baselines. Useful when transects across a fault want a narrow band while a long drawn baseline wants a wide one; the two are computed separately and shown together.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Swath width for the transects, when it should differ from the main Swath Width.</para>
+                </pythonReference>
+            </param>
+            <param name="transect_side" displayname="Transect Side" type="Optional" direction="Input" datatype="String" expression="{transect_side}">
+                <dialogReference>
+                    <para>Whether transects straddle the trace or extend to one side only.</para>
+                    <para>'Both sides' centres each transect on the trace. 'Left of trace' and 'Right of trace' are relative to the digitising direction of the trace.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Whether transects straddle the trace or extend to one side only.</para>
+                </pythonReference>
+            </param>
+            <param name="transect_start" displayname="Distance Along Trace to First Transect" type="Optional" direction="Input" datatype="Linear Unit" expression="{transect_start}">
+                <dialogReference>
+                    <para>Distance along the trace at which the first transect is placed.</para>
+                    <para>Use it to align transects with a reference point on the trace.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Distance along the trace at which the first transect is placed.</para>
+                </pythonReference>
+            </param>
+            <param name="method" displayname="Sampling Method" type="Required" direction="Input" datatype="String" expression="method">
+                <dialogReference>
+                    <para>How the band is sampled.</para>
+                    <para>Both methods give the same statistics on a straight baseline; they differ in what is sampled and what the chart can show. In either mode the profile along the baseline itself is also drawn (the dark 'Baseline' line) and written as Z_CENTRE.</para>
+                    <bulletList>
+                        <bullet_item>Offset lines (classic, keeps profile curves) - N parallel lines across the band, sampled at each station. Matches the published SwathProfiler method and produces the individual profile curves drawn in grey. Skips cells between the lines: on a fine DEM or a wide band most cells never contribute, and the tool reports the fraction.</bullet_item>
+                        <bullet_item>All cells (exact envelope) - every raster cell in the band contributes to its station. The min/max envelope and percentiles are exact. No individual curves. Recommended for LiDAR and for bands wider than a few hundred cells.</bullet_item>
+                    </bulletList>
+                </dialogReference>
+                <pythonReference>
+                    <para>How the band is sampled.</para>
+                </pythonReference>
+            </param>
+            <param name="n_lines" displayname="Number of Parallel Profiles" type="Optional" direction="Input" datatype="Long" expression="{n_lines}">
+                <dialogReference>
+                    <para>Number of parallel profile lines across the band (offset lines only).</para>
+                    <para>Default 51 (25 each side plus the centreline). Use an odd number so a line falls exactly on the baseline. The cross-track spacing is Swath Width divided by (N - 1); if that is coarser than the cell size, cells between the lines are never sampled.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Number of parallel profile lines across the band (offset lines only).</para>
+                </pythonReference>
+            </param>
+            <param name="step" displayname="Step Along Profile (default 1.5 x cell)" type="Optional" direction="Input" datatype="Linear Unit" expression="{step}">
+                <dialogReference>
+                    <para>Spacing of stations along the baseline.</para>
+                    <para>Defaults to 1.5 x the primary raster's cell size, as in the original SwathProfiler. Smaller steps add stations but no new information below the cell size.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Spacing of stations along the baseline.</para>
+                </pythonReference>
+            </param>
+            <param name="interpolation" displayname="Interpolation" type="Optional" direction="Input" datatype="String" expression="{interpolation}">
+                <dialogReference>
+                    <para>How a sample between cell centres is read (offset lines only).</para>
+                    <bulletList>
+                        <bullet_item>Bilinear - weighted average of the four surrounding cells. Exact for a planar surface; the default.</bullet_item>
+                        <bullet_item>Nearest - the value of the nearest cell. Preserves categorical or integer data.</bullet_item>
+                    </bulletList>
+                </dialogReference>
+                <pythonReference>
+                    <para>How a sample between cell centres is read (offset lines only).</para>
+                </pythonReference>
+            </param>
+            <param name="z_factor" displayname="Z Factor" type="Optional" direction="Input" datatype="Double" expression="{z_factor}">
+                <dialogReference>
+                    <para>Multiplier applied to raster values.</para>
+                    <para>Use it when elevations are in different units from the map, e.g. feet on a metre grid. Relief scales with it; HI and THi are dimensionless and do not.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Multiplier applied to raster values.</para>
+                </pythonReference>
+            </param>
+            <param name="multipart" displayname="Multipart Handling" type="Optional" direction="Input" datatype="String" expression="{multipart}">
+                <dialogReference>
+                    <para>What to do with multipart baseline features.</para>
+                    <bulletList>
+                        <bullet_item>Each part separately - every part becomes its own profile, identified by PART_ID. Parts are never joined, since that would invent a connecting segment.</bullet_item>
+                        <bullet_item>Largest part - only the longest part is profiled.</bullet_item>
+                        <bullet_item>Error - stop and report multipart features.</bullet_item>
+                    </bulletList>
+                </dialogReference>
+                <pythonReference>
+                    <para>What to do with multipart baseline features.</para>
+                </pythonReference>
+            </param>
+            <param name="tangent_smooth" displayname="Stabilise Cross-Section Direction" type="Optional" direction="Input" datatype="Boolean" expression="{tangent_smooth}">
+                <dialogReference>
+                    <para>Smooth the cross-section direction along the baseline.</para>
+                    <para>On by default. A hand-drawn or digitised line has a kink at every vertex, and a wide band folds onto itself at any corner tighter than its half-width. Stabilising smooths the direction of the cross-sections over about half a swath width so corners are rounded; the baseline itself is never moved. Turn off to reproduce strictly per-vertex normals.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Smooth the cross-section direction along the baseline.</para>
+                </pythonReference>
+            </param>
+            <param name="fold_policy" displayname="Tight-Bend Handling" type="Optional" direction="Input" datatype="String" expression="{fold_policy}">
+                <dialogReference>
+                    <para>What to do where the band folds onto itself on the inside of a bend.</para>
+                    <para>Beyond the centre of curvature the cross-section lines cross and would count the same ground for several stations.</para>
+                    <bulletList>
+                        <bullet_item>Mask folded samples - exclude them; N_VALID is lower there. Default.</bullet_item>
+                        <bullet_item>Warn only - keep them and report the count.</bullet_item>
+                        <bullet_item>Ignore - keep them silently.</bullet_item>
+                    </bulletList>
+                </dialogReference>
+                <pythonReference>
+                    <para>What to do where the band folds onto itself on the inside of a bend.</para>
+                </pythonReference>
+            </param>
+            <param name="smoothing" displayname="Curve Smoothing" type="Optional" direction="Input" datatype="String" expression="{smoothing}">
+                <dialogReference>
+                    <para>Savitzky-Golay smoothing applied to the profile lines before statistics.</para>
+                    <para>Presets None / Low / Medium / High / Ultra (windows of 5, 11, 21, 41 stations). Smoothing the lines and then taking min and max narrows the envelope slightly compared with smoothing the output curves; this matches the original tool. The chart window can change smoothing afterwards without re-running.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Savitzky-Golay smoothing applied to the profile lines before statistics.</para>
+                </pythonReference>
+            </param>
+            <param name="pct_low" displayname="Lower Percentile" type="Optional" direction="Input" datatype="Double" expression="{pct_low}">
+                <dialogReference>
+                    <para>Lower percentile reported as Z_PLO.</para>
+                    <para>Default 5. Together with the upper percentile it gives a robust envelope that ignores isolated extreme cells, useful on LiDAR.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Lower percentile reported as Z_PLO.</para>
+                </pythonReference>
+            </param>
+            <param name="pct_high" displayname="Upper Percentile" type="Optional" direction="Input" datatype="Double" expression="{pct_high}">
+                <dialogReference>
+                    <para>Upper percentile reported as Z_PHI.</para>
+                    <para>Default 95.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Upper percentile reported as Z_PHI.</para>
+                </pythonReference>
+            </param>
+            <param name="thi_raster" displayname="THi Source Raster (when several)" type="Optional" direction="Input" datatype="String" expression="{thi_raster}">
+                <dialogReference>
+                    <para>Which raster drives the THi panel when several rasters are profiled.</para>
+                    <para>HI and THi are computed for every raster but are only meaningful for elevation. Defaults to the first raster.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Which raster drives the THi panel when several rasters are profiled.</para>
+                </pythonReference>
+            </param>
+            <param name="legacy_stats" displayname="Legacy (ArcGIS-compatible) Statistics" type="Optional" direction="Input" datatype="Boolean" expression="{legacy_stats}">
+                <dialogReference>
+                    <para>Reproduce the original SwathProfiler statistics exactly, including two known defects.</para>
+                    <para>Off by default. When on, a flat cross-section gets HI = 0 instead of Null, and the THi relief factor is not clamped, so it can invert the index at very low relief. Use only to match previously published numbers. See docs/ALGORITHM.md, D3 and D4.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Reproduce the original SwathProfiler statistics exactly, including two known defects.</para>
+                </pythonReference>
+            </param>
+            <param name="flat_hi" displayname="Flat Cross-Section HI" type="Optional" direction="Input" datatype="String" expression="{flat_hi}">
+                <dialogReference>
+                    <para>Value of the hypsometric integral where the cross-section is flat.</para>
+                    <para>A flat cross-section has no hypsometry, so Null is the honest answer.</para>
+                    <bulletList>
+                        <bullet_item>Null - undefined (default).</bullet_item>
+                        <bullet_item>0.5 - the neutral value.</bullet_item>
+                        <bullet_item>Reference (0.0) - what the original tool reports.</bullet_item>
+                    </bulletList>
+                </dialogReference>
+                <pythonReference>
+                    <para>Value of the hypsometric integral where the cross-section is flat.</para>
+                </pythonReference>
+            </param>
+            <param name="min_valid" displayname="Minimum Valid Samples per Station" type="Optional" direction="Input" datatype="Long" expression="{min_valid}">
+                <dialogReference>
+                    <para>Minimum number of valid samples for a station to be reported.</para>
+                    <para>Stations with fewer valid samples (NoData, outside the raster, or masked folds) get Null statistics. Default 1.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Minimum number of valid samples for a station to be reported.</para>
+                </pythonReference>
+            </param>
+            <param name="out_band" displayname="Swath Band Polygons" type="Optional" direction="Output" datatype="Feature Class" expression="{out_band}">
+                <dialogReference>
+                    <para>Polygon of the band actually sampled, one feature per baseline.</para>
+                    <para>Added to the map with a transparent fill so you can see what was measured. It self-intersects wherever the band folds; that is deliberate.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Polygon of the band actually sampled, one feature per baseline.</para>
+                </pythonReference>
+            </param>
+            <param name="out_stations" displayname="Station Points (chart linked to map)" type="Optional" direction="Output" datatype="Feature Class" expression="{out_stations}">
+                <dialogReference>
+                    <para>One point per station carrying all the statistics as attributes.</para>
+                    <para>This is what links the chart to the map: a native line chart is attached to this layer, and selecting on the chart highlights stations on the map and vice versa. Attributes are prefixed by raster name, e.g. MEADOWS_MEAN, MEADOWS_THI, so the layer can be symbolised by any statistic.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>One point per station carrying all the statistics as attributes.</para>
+                </pythonReference>
+            </param>
+            <param name="out_transects" displayname="Transects" type="Optional" direction="Output" datatype="Feature Class" expression="{out_transects}">
+                <dialogReference>
+                    <para>The generated transects (when a trace is given), numbered and labelled.</para>
+                    <para>Fields TRANSECT_ID, LINE_NAME (T001...), DIST_ALONG, AZIMUTH and LENGTH. Labelled on the map with the transect name.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>The generated transects (when a trace is given), numbered and labelled.</para>
+                </pythonReference>
+            </param>
+            <param name="out_offset_lines" displayname="Offset Lines" type="Optional" direction="Output" datatype="Feature Class" expression="{out_offset_lines}">
+                <dialogReference>
+                    <para>The parallel profile lines as features (offset lines only).</para>
+                    <para>One feature per line with its signed OFFSET (positive to the left of the digitising direction) and the number of valid samples along it.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>The parallel profile lines as features (offset lines only).</para>
+                </pythonReference>
+            </param>
+            <param name="out_profiles_3d" displayname="3D Profile Lines (Z-enabled)" type="Optional" direction="Output" datatype="Feature Class" expression="{out_profiles_3d}">
+                <dialogReference>
+                    <para>Z-enabled lines of the minimum, mean and maximum profiles.</para>
+                    <para>For 3D scenes and CAD export. Lines are split into parts at NoData gaps rather than interpolated across them.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Z-enabled lines of the minimum, mean and maximum profiles.</para>
+                </pythonReference>
+            </param>
+            <param name="out_summary" displayname="Summary Table" type="Optional" direction="Output" datatype="Table" expression="{out_summary}">
+                <dialogReference>
+                    <para>One row per baseline and raster with run-level values and provenance.</para>
+                    <para>Includes lengths, station counts, the percentile pair, maximum relief, mean HI and THi, minimum radius of curvature, NoData fraction, elapsed time and a JSON blob of every parameter so a result can be reproduced later.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>One row per baseline and raster with run-level values and provenance.</para>
+                </pythonReference>
+            </param>
+            <param name="out_csv_folder" displayname="CSV Folder" type="Optional" direction="Output" datatype="Folder" expression="{out_csv_folder}">
+                <dialogReference>
+                    <para>Folder for one CSV per baseline with all statistics side by side.</para>
+                    <para>Wide format across rasters. NoData is written as an empty cell, never 'nan', so spreadsheets read the columns as numbers.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Folder for one CSV per baseline with all statistics side by side.</para>
+                </pythonReference>
+            </param>
+            <param name="chart_formats" displayname="Also Save Chart As" type="Optional" direction="Input" datatype="Multiple Value" expression="{chart_formats;chart_formats...}">
+                <dialogReference>
+                    <para>Also write the chart as image files without opening the viewer.</para>
+                    <para>PNG, PDF and SVG use the chosen Chart Preset: one file per profile, plus a stacked 'ridgeline' figure of all profiles when there are several (transects along a trace). The native Pro chart is always provided on the Station Points layer.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Also write the chart as image files without opening the viewer.</para>
+                </pythonReference>
+            </param>
+            <param name="chart_preset" displayname="Chart Preset" type="Optional" direction="Input" datatype="String" expression="{chart_preset}">
+                <dialogReference>
+                    <para>Size and typography for saved chart files.</para>
+                    <bulletList>
+                        <bullet_item>Screen - as in the viewer.</bullet_item>
+                        <bullet_item>Journal single column - 85 mm wide, 8 pt.</bullet_item>
+                        <bullet_item>Journal double column - 170 mm wide, 8 pt.</bullet_item>
+                        <bullet_item>Poster - 300 mm wide, 14 pt.</bullet_item>
+                        <bullet_item>PDF and SVG keep text editable.</bullet_item>
+                    </bulletList>
+                </dialogReference>
+                <pythonReference>
+                    <para>Size and typography for saved chart files.</para>
+                </pythonReference>
+            </param>
+            <param name="out_chart_folder" displayname="Chart Folder" type="Optional" direction="Output" datatype="Folder" expression="{out_chart_folder}">
+                <dialogReference>
+                    <para>Folder for the saved chart files.</para>
+                    <para>Defaults to the folder holding the statistics table.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Folder for the saved chart files.</para>
+                </pythonReference>
+            </param>
+            <param name="open_viewer" displayname="Show Interactive Chart" type="Optional" direction="Input" datatype="Boolean" expression="{open_viewer}">
+                <dialogReference>
+                    <para>Show the interactive chart window.</para>
+                    <para>On by default. The window runs as a separate program: it stays open, refreshes with each run, and can be reopened later with SwathViewer.cmd on any saved .swath.npz result.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Show the interactive chart window.</para>
+                </pythonReference>
+            </param>
+            <param name="add_to_map" displayname="Add Outputs to Map" type="Optional" direction="Input" datatype="Boolean" expression="{add_to_map}">
+                <dialogReference>
+                    <para>Add the outputs (band, station points, transects, table) to the map when the tool finishes.</para>
+                    <para>On by default. Turn off for a quick look when you only want the chart window: ArcGIS Pro's own step of adding layers and redrawing the map after a tool finishes is what shows as 'updating', and in a heavy map it can take longer than the tool itself. The outputs and their layer files are still written and can be added later.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Add the outputs (band, station points, transects, table) to the map when the tool finishes.</para>
+                </pythonReference>
+            </param>
+            <param name="geo_transform" displayname="Datum Transformation" type="Optional" direction="Input" datatype="String" expression="{geo_transform}">
+                <dialogReference>
+                    <para>Datum transformation between the baseline and raster coordinate systems.</para>
+                    <para>Choose one whenever the list offers any. Without a transformation, arcpy may apply none and shift the baseline by 100 m or more with no other symptom.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Datum transformation between the baseline and raster coordinate systems.</para>
+                </pythonReference>
+            </param>
+            <param name="max_block_mb" displayname="Max Raster Block (MB)" type="Optional" direction="Input" datatype="Long" expression="{max_block_mb}">
+                <dialogReference>
+                    <para>Memory budget for each block of raster read.</para>
+                    <para>Default 512 MB. Lower it on a machine with little memory; the tool then reads the raster in more, smaller pieces. Results are identical.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>Memory budget for each block of raster read.</para>
+                </pythonReference>
+            </param>
+            <param name="bundle_path" displayname="Result Bundle (.swath.npz)" type="Optional" direction="Output" datatype="File" expression="{bundle_path}">
+                <dialogReference>
+                    <para>The live result file the chart window watches.</para>
+                    <para>Overwritten on every run; a permanent copy of each run is also kept under the project's swath_results folder. Change this only to keep several viewer windows independent.</para>
+                </dialogReference>
+                <pythonReference>
+                    <para>The live result file the chart window watches.</para>
+                </pythonReference>
+            </param>
+        </parameters>
+        <summary>
+            <para>Extracts swath profiles along one or more baselines: for every station along the line, the minimum, maximum, mean, median, quartiles and chosen percentiles of a raster across a band of the chosen width, plus local relief, the hypsometric integral (HI) and the terrain hypsometric index (THi). Draw a line on the map or use a line layer, or give a fault trace and let the tool place perpendicular transects along it. Results open in an interactive chart window that refreshes on every run. After Perez-Pena et al. (2017).</para>
+        </summary>
+        <usage>
+            <para>Lines and rasters may be in any coordinate system; the swath is computed in a projected working system (the first projected raster's, else the baseline's, else a UTM zone) and samples are transformed into each raster's own system.</para>
+            <para>Leave the chart window open between runs: each run adds its profiles to the window's list so you can compare them.</para>
+            <para>For high-resolution DEMs or wide bands, choose the All cells sampling method: offset lines skip most of the cells in the band and the tool will tell you what fraction.</para>
+        </usage>
+    </tool>
+    <dataIdInfo>
+        <idCitation>
+            <resTitle>Swath Profile</resTitle>
+        </idCitation>
+        <idAbs>Extracts swath profiles along one or more baselines: for every station along the line, the minimum, maximum, mean, median, quartiles and chosen percentiles of a raster across a band of the chosen width, plus local relief, the hypsometric integral (HI) and the terrain hypsometric index (THi). Draw a line on the map or use a line layer, or give a fault trace and let the tool place perpendicular transects along it. Results open in an interactive chart window that refreshes on every run. After Perez-Pena et al. (2017).</idAbs>
+    </dataIdInfo>
+</metadata>

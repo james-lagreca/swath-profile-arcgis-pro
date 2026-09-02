@@ -1,0 +1,48 @@
+cff-version: 1.2.0
+message: "If you use this tool, please cite it and the method paper it implements."
+title: "Swath Profile for ArcGIS Pro"
+version: 1.0.0
+date-released: 2026-09-02
+type: software
+license: GPL-3.0
+repository-code: "https://github.com/james-lagreca/swath-profile-arcgis-pro"
+url: "https://github.com/james-lagreca/swath-profile-arcgis-pro"
+authors:
+  - family-names: LaGreca
+    given-names: James
+abstract: >-
+  An ArcGIS Pro Python toolbox that extracts swath profiles along drawn or
+  existing baselines, or along transects placed automatically across a fault
+  trace: per-station minimum, maximum, mean, median, quartiles, percentiles,
+  local relief, hypsometric integral and the terrain hypsometric index (THi),
+  with an interactive chart linked to the map. A port of the SwathProfiler
+  method of Perez-Pena et al. (2017) to arcpy/numpy, with documented fixes to
+  seventeen numerical defects of the reference implementations.
+keywords:
+  - swath profile
+  - geomorphology
+  - tectonic geomorphology
+  - ArcGIS Pro
+  - hypsometric integral
+references:
+  - type: article
+    title: "SwathProfiler and NProfiler: Two new ArcGIS Add-ins for the automatic extraction of swath and normalized river profiles"
+    authors:
+      - family-names: Pérez-Peña
+        given-names: J. V.
+      - family-names: Al-Awabdeh
+        given-names: M.
+      - family-names: Azañón
+        given-names: J. M.
+      - family-names: Galve
+        given-names: J. P.
+      - family-names: Booth-Rea
+        given-names: G.
+      - family-names: Notti
+        given-names: D.
+    journal: "Computers & Geosciences"
+    volume: 104
+    start: 135
+    end: 150
+    year: 2017
+    doi: 10.1016/j.cageo.2016.08.008
