@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Colour the profile lines by which side of the baseline they came from.**
+  Offset-lines sampling only. Choose *Side of line* (one colour each side) or
+  *Side + distance* (the same two colours fading in towards the baseline, so how
+  far out a profile sits is readable too) in the chart window under *Profile
+  lines*, or with the new *Colour Profile Lines By* parameter for the exported
+  figures. The default is the historic single grey, so existing figures are
+  unchanged.
+  - Left and right are relative to the direction the baseline was digitised,
+    which is invisible on a map, so the legend adds the compass point each side
+    faces: `Left (W)`, `Right (E)`. On a baseline that curves too much for one
+    bearing to be honest the compass is left off. Flipping the display turns the
+    compass through 180 degrees, so a side keeps the label it deserves.
+  - The *Offset Lines* output gains a `SIDE` field holding `Left`, `Right` or
+    `Centre`, and for the first time gets a layer file: a unique-value renderer
+    on that field, in the same colours as the chart. The colours are copied from
+    the chart palette when the layer file is written, so the two cannot drift.
+  - The cross-section panel colours its samples to match.
+  - The line's own profile (offset zero) is drawn in the baseline's near-black
+    rather than either side's colour, using the same centre test the statistics
+    use, so the chart and `Z_CENTRE` always agree about which line that is.
+
+### Fixed
+- **Drawing a baseline worked only every other time the tool was opened.** The
+  sketch parameter was given a POLYLINE template created in the `memory`
+  workspace. That workspace lives as long as the ArcGIS Pro process, so the
+  first dialog open created the template and bound the parameter to that
+  dataset, which disables the sketch tool; every later open raised
+  `ERROR 000258: Output ... already exists`, had it swallowed, and left the
+  parameter unbound, which is the state that lets you draw. Running the tool
+  set `overwriteOutput` to true for the rest of the session, so creation began
+  succeeding again and the sketch broke again. The geometry type is now set
+  with the parameter's own `filter.list` and no template is created. Dialog
+  construction no longer makes a geoprocessing call or touches `arcpy.mp`,
+  which also helps in slow projects. Two related defects went with it: the
+  template was created with no coordinate system whenever the active map could
+  not be read, and a feature set whose coordinate system is unknown cannot be
+  edited; and `execute` left `overwriteOutput` switched on for the rest of the
+  session, which is what made the failure alternate rather than repeat.
+  `updateMessages` now also rejects a sketch that is not a line, rather than
+  reading a polygon as its own boundary or failing part-way through a run.
+
+### Changed
+- The offset-lines template feature class is keyed `offsets_side` rather than
+  `offsets`, because the cached `_swath_tmpl_offsets` in a results geodatabase
+  written by 1.0.0 has no `SIDE` field. Existing geodatabases keep that one
+  unused table; it can be deleted.
+
 ## 1.0.0 — 2026-09-02
 
 First public release.

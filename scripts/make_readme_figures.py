@@ -55,11 +55,12 @@ def terrain():
 def swath(block, grid, verts, width, step, n_lines):
     m = geom.station_count(geom.polyline_length(verts), step)
     c, s = geom.resample_polyline(verts, m)
-    t, nrm = geom.tangents_normals(c, 21)
+    _, nrm = geom.tangents_normals(c, 21)
     p, offsets = geom.offset_grid(c, nrm, width, n_lines)
     values = sample_block(block, grid, p[..., 0], p[..., 1], method="bilinear")
     st = compute_stats(values, s, offsets=offsets, name="lidar_dem")
     st.z_centre = st.values[n_lines // 2].copy()
+    st.normal_bearing, st.normal_resultant = geom.mean_normal_bearing(nrm)
     return st, c
 
 
@@ -74,8 +75,9 @@ def main():
     xs = cross_section(st, int(0.42 * st.n_stations))
     fig, _ = plotting.build_figure(
         {"lidar_dem": st}, title="Swath across a fault scarp - 300 m band",
-        cross_section=xs, footer="synthetic terrain; regenerate with "
-        "scripts/make_readme_figures.py")
+        cross_section=xs, profile_colour="side",
+        footer="synthetic terrain; profiles coloured by side of the baseline; "
+               "regenerate with scripts/make_readme_figures.py")
     plotting.save_figure(fig, os.path.join(OUT, "swath_chart.png"), dpi=130)
 
     # Transects along the trace, stacked.

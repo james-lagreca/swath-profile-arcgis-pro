@@ -31,6 +31,10 @@ from swathprofile.smoothing import SMOOTH_PRESETS
 METHOD_OFFSET = "Offset lines (classic, keeps profile curves)"
 METHOD_ZONAL = "All cells (exact envelope)"
 SIDES = {"Both sides": "both", "Left of trace": "left", "Right of trace": "right"}
+#: Dialog wording -> plotting mode for the individual profile lines.  Offset
+#: lines only: All-cells sampling keeps no per-line samples to colour.
+PROFILE_COLOUR_CHOICES = {"Single colour": "single", "Side of line": "side",
+                          "Side + distance": "ramp"}
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIEWER_SCRIPT = os.path.join(ROOT, "viewer", "swath_viewer.py")
@@ -372,16 +376,41 @@ class SwathProfileTool(object):
             return prm
 
         draw = p("draw_lines", "Draw Baseline on Map", "GPFeatureRecordSetLayer")
-        try:
-            # The template defines the sketch: a polyline in the active map's
-            # coordinate system, so what is drawn arrives exactly as drawn.
-            map_sr = _active_map_sr()
-            kwargs = {"spatial_reference": map_sr} if map_sr is not None else {}
-            tmpl = arcpy.management.CreateFeatureclass(
-                "memory", "swath_baseline_template", "POLYLINE", **kwargs)[0]
-            draw.value = tmpl
-        except Exception:
-            pass
+        # Set no value; constrain the sketch to lines with the parameter's own
+        # filter.  Pro's interactive input button then builds the sketch layer
+        # itself, in the active map's coordinate system, and the filter is what
+        # narrows its feature-type menu to a line.  _run() still falls back to
+        # asking the map if a sketch ever arrives without a coordinate system.
+        #
+        # Esri does document assigning a feature class or a .lyrx to .value as a
+        # way to give a feature set its schema, but it is the wrong tool here:
+        # arcpy materialises whatever path is assigned into an in-memory feature
+        # set at assignment time and keeps no link to it, so the template's only
+        # lasting effect was to make the dialog depend on process-lifetime
+        # state.  The "memory" workspace lives as long as the ArcGIS Pro
+        # process, so the first open created memory\swath_baseline_template and
+        # gave the parameter a value, while every later open raised
+        # "ERROR 000258: Output ... already exists", had it swallowed by the
+        # except, and left the parameter unset - the state in which drawing
+        # actually works.  Worse, whenever _active_map_sr() returned None the
+        # template was created with no coordinate system at all, and a feature
+        # set whose CRS is Unknown cannot be edited; that, plus execute()
+        # leaking overwriteOutput = True for the rest of the session (restored
+        # now), is the "sometimes" in the bug report.
+        #
+        # A .lyrx template would fix none of that and would bake one fixed CRS
+        # into every user's sketch.  Dropping the template also takes a
+        # geoprocessing call and an arcpy.mp map access out of dialog
+        # construction, which matters where every framework call costs tens of
+        # seconds.
+        #
+        # The filter is not documented to drive the sketch menu, so
+        # updateMessages checks the shape type as well.  No try/except here:
+        # the assignment cannot raise.  Measured on arcpy 3.4, an unsupported
+        # keyword is silently coerced to an empty list instead ("Line" and
+        # "Bogus" both give []), so "Polyline" is the spelling that survives and
+        # a handler would only imply a failure mode that does not exist.
+        draw.filter.list = ["Polyline"]
 
         lines = p("in_lines", "...or Baseline Layer", "GPFeatureLayer")
         lines.filter.list = ["Polyline"]
@@ -521,6 +550,12 @@ class SwathProfileTool(object):
         preset.filter.list = list(plotting.PRESETS.keys())
         preset.value = "Screen"
 
+        pcolour = p("chart_profile_colour", "Colour Profile Lines By", "GPString",
+                    category="Outputs")
+        pcolour.filter.type = "ValueList"
+        pcolour.filter.list = list(PROFILE_COLOUR_CHOICES.keys())
+        pcolour.value = "Single colour"
+
         chart_dir = p("out_chart_folder", "Chart Folder", "DEFolder",
                       direction="Output", category="Outputs")
 
@@ -552,7 +587,7 @@ class SwathProfileTool(object):
                 method, nlines, step, interp, zfac, multipart, tsmooth, fold,
                 smooth, plo, phi, thi_src, legacy, flathi, minvalid,
                 band, stations, transects, offs, prof3d, summary, csv_dir,
-                chart_fmt, preset, chart_dir, viewer, add_map,
+                chart_fmt, preset, pcolour, chart_dir, viewer, add_map,
                 geotrans, blockmb, bundle]
 
     # -- validation -----------------------------------------------------------
@@ -626,10 +661,33 @@ class SwathProfileTool(object):
         fmts = set(pr["chart_formats"].values or [])
         pr["out_chart_folder"].enabled = bool(fmts & {"PNG", "PDF", "SVG"})
         pr["chart_preset"].enabled = bool(fmts & {"PNG", "PDF", "SVG"})
+        # Colouring the profile lines needs per-line samples, which only offset
+        # sampling produces.
+        pr["chart_profile_colour"].enabled = (bool(fmts & {"PNG", "PDF", "SVG"})
+                                              and is_offset)
 
     def updateMessages(self, params):
         pr = _by_name(params)
         rasters = self._raster_values(pr)
+
+        # A swath needs a line to run along.  Pro's sketch menu is asked for a
+        # line by the parameter's filter, but that is not documented to bind, so
+        # the shape type is checked here too: a polygon would silently be read
+        # as a baseline along its boundary, and a point fails part-way through
+        # the run with a much less helpful message.  Describe on an in-memory
+        # record set is not a geoprocessing-framework call, so this is free even
+        # in a slow project, and it only runs once something has been drawn.
+        sketch = pr["draw_lines"].value
+        if sketch is not None:
+            try:
+                shape_type = getattr(arcpy.Describe(sketch), "shapeType", "")
+            except Exception:
+                shape_type = ""
+            if shape_type and shape_type != "Polyline":
+                pr["draw_lines"].setErrorMessage(
+                    f"The sketch is {shape_type}, not a line. Click the sketch "
+                    "button beside this parameter and choose the line tool, or "
+                    "use the Baseline Layer parameter instead.")
 
         for value in rasters:
             try:
@@ -757,6 +815,10 @@ class SwathProfileTool(object):
 
     def execute(self, params, messages):
         msg = ArcpyMessenger()
+        # Restored in the finally below.  Leaking it True for the rest of the
+        # Pro session changed how the dialog behaved on later opens, which is
+        # what made the sketch bug intermittent rather than reproducible.
+        saved_overwrite = arcpy.env.overwriteOutput
         arcpy.env.overwriteOutput = True
         # Every geoprocessing call made inside the tool (CreateTable, AddFields,
         # CopyRows, MakeFeatureLayer, ...) would otherwise be appended to the
@@ -788,6 +850,7 @@ class SwathProfileTool(object):
         finally:
             try:
                 arcpy.env.addOutputsToMap = saved_add
+                arcpy.env.overwriteOutput = saved_overwrite
             except Exception:
                 pass
             for setter, value in saved.items():
@@ -818,8 +881,9 @@ class SwathProfileTool(object):
 
         # arcpy.mp.ArcGISProject("CURRENT") is never called during execution:
         # on a large project (many layers, network drive) it can block for
-        # many minutes.  The sketch template already carries the map's CRS, so
-        # the map is only consulted if a sketch somehow arrives without one.
+        # many minutes.  A line sketched on the map arrives in the map's own
+        # coordinate system, so the map is only consulted in the rare case of a
+        # feature set that reports no coordinate system at all.
         sketch_sr = None
         if sketch is not None:
             try:
@@ -873,6 +937,8 @@ class SwathProfileTool(object):
             smooth_window=SMOOTH_PRESETS.get(pr["smoothing"].valueAsText, 0),
             pct_low=float(pr["pct_low"].value or 5.0),
             pct_high=float(pr["pct_high"].value or 95.0),
+            chart_profile_colour=PROFILE_COLOUR_CHOICES.get(
+                pr["chart_profile_colour"].valueAsText, "single"),
             flat_hi={"Null": "nan", "0.5": "half",
                      "Reference (0.0)": "reference"}[pr["flat_hi"].valueAsText],
             min_valid=int(pr["min_valid"].value or 1),
@@ -1085,6 +1151,8 @@ class SwathProfileTool(object):
             path = self._unique(pr["out_offset_lines"].valueAsText)
             features.write_offset_lines(path, lines, sr, msg)
             pr["out_offset_lines"].value = path
+            self._attach_layer_file(pr["out_offset_lines"], path, lyrx_dir,
+                                    "offsets", msg)
 
         if pr["out_profiles_3d"].valueAsText and cfg.is_offset:
             profiles = []
@@ -1109,7 +1177,8 @@ class SwathProfileTool(object):
         if image_fmts:
             folder = pr["out_chart_folder"].valueAsText or arcpy.env.scratchFolder
             self._write_charts(folder, result, cfg, image_fmts,
-                               pr["chart_preset"].valueAsText or "Screen", msg)
+                               pr["chart_preset"].valueAsText or "Screen", msg,
+                               cfg.chart_profile_colour)
 
         bundle = pr["bundle_path"].valueAsText or \
             os.path.join(arcpy.env.scratchFolder, "swath_live" + BUNDLE_SUFFIX)
@@ -1167,7 +1236,8 @@ class SwathProfileTool(object):
 
     # -- charts, bundle, viewer -----------------------------------------------
 
-    def _write_charts(self, folder, result, cfg, formats, preset, msg):
+    def _write_charts(self, folder, result, cfg, formats, preset, msg,
+                      profile_colour="single"):
         plotting.use_agg()
         os.makedirs(folder, exist_ok=True)
         footer = (f"swath width {cfg.swath_width:g} | step {cfg.step:g} | "
@@ -1178,7 +1248,7 @@ class SwathProfileTool(object):
             fig, _ = plotting.build_figure(
                 result.for_part(oid, part_id), title=f"Swath profile - {name}",
                 thi_raster=result.thi_raster, footer=footer, preset=preset,
-                pct=(cfg.pct_low, cfg.pct_high))
+                pct=(cfg.pct_low, cfg.pct_high), profile_colour=profile_colour)
             stem = outputs.safe_prefix(name, 32).lower()
             for ext in sorted(formats):
                 path = os.path.join(folder, f"swath_{stem}_p{part_id}.{ext.lower()}")

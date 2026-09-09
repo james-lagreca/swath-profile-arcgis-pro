@@ -197,6 +197,10 @@ def run_swath(baselines, rasters, cfg: SwathConfig, working_sr=None,
         m = geom.station_count(bl.length, cfg.step, cfg.max_stations)
         c, s = geom.resample_polyline(verts, m)
         t, nrm = geom.tangents_normals(c, cfg.tangent_smooth_window)
+        # Which way "left of the line" actually points, so a chart legend can
+        # name the side by compass instead of by digitising direction.  The
+        # resultant says whether one bearing describes the whole baseline.
+        normal_bearing, normal_resultant = geom.mean_normal_bearing(nrm)
         # Curvature of the direction field that builds the band - after any
         # stabilising - since that is what decides whether the band folds.
         kappa = geom.direction_curvature(t, s)
@@ -246,6 +250,7 @@ def run_swath(baselines, rasters, cfg: SwathConfig, working_sr=None,
             "oid": bl.oid, "part_id": bl.part_id,
             "centreline": c, "distances": s, "tangents": t, "normals": nrm,
             "kappa": kappa, "offsets": offsets,
+            "normal_bearing": normal_bearing, "normal_resultant": normal_resultant,
             "folded": folded, "step_actual": step_actual,
             "ring": geom.band_ring(c, nrm, cfg.swath_width),
             "points": p,
@@ -342,6 +347,9 @@ def run_swath(baselines, rasters, cfg: SwathConfig, working_sr=None,
                     from .smoothing import savgol_nan
                     zc = savgol_nan(zc, cfg.smooth_window, dilate=cfg.smooth_dilate)
                 stats.z_centre = np.asarray(zc, dtype=np.float64)
+
+            stats.normal_bearing = normal_bearing
+            stats.normal_resultant = normal_resultant
 
             if stats.n_empty_stations:
                 msg.warn(

@@ -24,6 +24,9 @@ median, quartiles and chosen percentiles, local relief, hypsometric integral
 - Chart window that stays open across runs: cross‑sections, measurements,
   re‑zero at the fault, detrend, overlay or stacked ridgeline of several
   profiles, publication presets.
+- Profile lines colourable by which side of the baseline they came from, in the
+  chart and on the offset‑lines layer in the map, with the compass direction of
+  each side named in the legend.
 - Map outputs with a native chart linked to map selection; hover help on every
   parameter; a time estimate before you press Run.
 - Seventeen documented numerical fixes over the reference implementations, with
@@ -106,6 +109,7 @@ list, so you can draw line after line and compare. Its maths lives in
 | **Distance axis** | Type an origin or `Pick` one on the chart (`O`) so distance is zero at the fault; `Flip direction` to read across strike consistently. The cross‑section mirrors with it. |
 | **Detrend** | *Linear detrend* removes the regional slope from every series so a scarp on a sloping piedmont stands out; *Relative to minimum* expresses the swath above its floor. |
 | **Series** | Profile family, Min/Max, the percentile band, Q1/Q3, Mean, Median, the **baseline's own profile** (dark line — the classic single‑line profile, read against the band it sits in), Relief on a right axis. |
+| **Colour by** (under *Profile lines*) | Colour the individual profiles by **which side of the baseline** they came from, so an asymmetric range front or valley reads at a glance. *Side + distance* also fades each colour in towards the line, showing how far out a profile sits. The legend names the compass point each side faces (`Left (W)`, `Right (E)`), because left and right depend on the direction you drew the line; on a baseline too curved for one bearing the compass is omitted. Offset‑lines sampling only. |
 | **Smoothing** | Savitzky–Golay presets, re‑applied live to the raw samples. |
 | **Vertical exaggeration** | Live *VE ≈ n×* readout in the status bar; set a VE or tick *Equal aspect*. |
 | **THi panel** | Show/hide; enhanced THi\*. Raster panels can be hidden individually. |
@@ -202,7 +206,7 @@ never collide with a layer's OIDs.
 "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe" -m pytest tests -q
 ```
 
-107 tests. Most assert against closed‑form answers on analytic surfaces — a
+117 tests. Most assert against closed‑form answers on analytic surfaces — a
 plane cross‑section has HI exactly 0.5 and THi exactly 50, bilinear
 interpolation is exact on a plane, detrending a plane profile gives exactly
 zero, transects on a circular trace are exactly radial — so a failure localises

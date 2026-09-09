@@ -234,7 +234,9 @@ PARAM_HELP = {
     "out_offset_lines": (
         "The parallel profile lines as features (offset lines only).",
         ["One feature per line with its signed OFFSET (positive to the left of the "
-         "digitising direction) and the number of valid samples along it."],
+         "digitising direction) and the number of valid samples along it.",
+         "SIDE holds Left, Right or Centre, and the layer is symbolised on it in "
+         "the same colours the chart uses, so the two can be read together."],
         []),
     "out_profiles_3d": (
         "Z-enabled lines of the minimum, mean and maximum profiles.",
@@ -268,6 +270,22 @@ PARAM_HELP = {
          "Journal double column - 170 mm wide, 8 pt.",
          "Poster - 300 mm wide, 14 pt.",
          "PDF and SVG keep text editable."]),
+    "chart_profile_colour": (
+        "Colour the individual profile lines by which side of the baseline they "
+        "came from.",
+        ["Offset lines sampling only: All cells keeps no per-line samples to "
+         "colour, and the setting is ignored. The same choice is available live "
+         "in the chart window, under Profile lines.",
+         "Positive offsets are to the left of the direction the baseline was "
+         "digitised. Because that direction is invisible on a map, the legend "
+         "adds the compass point each side faces, for example 'Left (W)'; on a "
+         "baseline that curves too much for one bearing to be honest the "
+         "compass is left off. The Offset Lines output carries the same "
+         "classification in its SIDE field, symbolised to match."],
+        ["Single colour - faint grey, as in earlier versions.",
+         "Side of line - one colour each side, the centre line in near-black.",
+         "Side + distance - the same two colours, fading in towards the "
+         "baseline, so how far out a profile sits is readable too."]),
     "out_chart_folder": (
         "Folder for the saved chart files.",
         ["Defaults to the folder holding the statistics table."],

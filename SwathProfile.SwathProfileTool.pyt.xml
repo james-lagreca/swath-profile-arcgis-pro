@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <metadata xml:lang="en">
     <Esri>
-        <CreaDate>20260902</CreaDate>
-        <CreaTime>17234500</CreaTime>
+        <CreaDate>20260909</CreaDate>
+        <CreaTime>10365600</CreaTime>
         <ArcGISFormat>1.0</ArcGISFormat>
         <SyncOnce>TRUE</SyncOnce>
-        <ModDate>20260902</ModDate>
-        <ModTime>172345</ModTime>
+        <ModDate>20260909</ModDate>
+        <ModTime>103656</ModTime>
     </Esri>
     <tool name="SwathProfileTool" displayname="Swath Profile" toolboxalias="swathprofile" xmlns="">
         <arcToolboxHelpPath>c:\program files\arcgis\pro\Resources\Help\gp</arcToolboxHelpPath>
@@ -306,6 +306,7 @@
                 <dialogReference>
                     <para>The parallel profile lines as features (offset lines only).</para>
                     <para>One feature per line with its signed OFFSET (positive to the left of the digitising direction) and the number of valid samples along it.</para>
+                    <para>SIDE holds Left, Right or Centre, and the layer is symbolised on it in the same colours the chart uses, so the two can be read together.</para>
                 </dialogReference>
                 <pythonReference>
                     <para>The parallel profile lines as features (offset lines only).</para>
@@ -360,6 +361,21 @@
                 </dialogReference>
                 <pythonReference>
                     <para>Size and typography for saved chart files.</para>
+                </pythonReference>
+            </param>
+            <param name="chart_profile_colour" displayname="Colour Profile Lines By" type="Optional" direction="Input" datatype="String" expression="{chart_profile_colour}">
+                <dialogReference>
+                    <para>Colour the individual profile lines by which side of the baseline they came from.</para>
+                    <para>Offset lines sampling only: All cells keeps no per-line samples to colour, and the setting is ignored. The same choice is available live in the chart window, under Profile lines.</para>
+                    <para>Positive offsets are to the left of the direction the baseline was digitised. Because that direction is invisible on a map, the legend adds the compass point each side faces, for example 'Left (W)'; on a baseline that curves too much for one bearing to be honest the compass is left off. The Offset Lines output carries the same classification in its SIDE field, symbolised to match.</para>
+                    <bulletList>
+                        <bullet_item>Single colour - faint grey, as in earlier versions.</bullet_item>
+                        <bullet_item>Side of line - one colour each side, the centre line in near-black.</bullet_item>
+                        <bullet_item>Side + distance - the same two colours, fading in towards the baseline, so how far out a profile sits is readable too.</bullet_item>
+                    </bulletList>
+                </dialogReference>
+                <pythonReference>
+                    <para>Colour the individual profile lines by which side of the baseline they came from.</para>
                 </pythonReference>
             </param>
             <param name="out_chart_folder" displayname="Chart Folder" type="Optional" direction="Output" datatype="Folder" expression="{out_chart_folder}">

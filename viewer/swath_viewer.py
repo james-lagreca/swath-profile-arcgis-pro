@@ -61,6 +61,12 @@ SERIES = [("profiles", "Profile lines"), ("min", "Minimum"), ("max", "Maximum"),
           ("mean", "Mean"), ("median", "Median"), ("centre", "Baseline profile"),
           ("relief", "Relief (right axis)")]
 DETREND_MODES = ["None", "Linear detrend", "Relative to minimum"]
+#: How the individual profile lines are coloured.  "Side of line" answers
+#: "which side of the baseline did this profile come from"; "Side + distance"
+#: keeps the two side colours but fades them in towards the baseline, so how
+#: far out across the swath a profile sits is readable as well.
+PROFILE_COLOUR = {"Single colour": "single", "Side of line": "side",
+                  "Side + distance": "ramp"}
 STACK_SERIES = {"Mean": "z_mean", "Baseline": "z_centre", "Min": "z_min",
                 "Max": "z_max", "Median": "z_median"}
 STACK_ALIGN = {"Own minimum": "min", "Own mean": "mean", "Absolute": "none"}
@@ -282,11 +288,27 @@ class SwathViewer(tk.Tk):
         # -- Series -----------------------------------------------------------
         heading("Series")
         self.show_vars = {}
+        self.show_widgets = {}
         for key, label in SERIES:
             var = tk.BooleanVar(value=plotting.DEFAULT_SHOW.get(key, False))
             self.show_vars[key] = var
-            ttk.Checkbutton(side, text=label, variable=var,
-                            command=self.redraw).pack(anchor="w")
+            cb = ttk.Checkbutton(side, text=label, variable=var,
+                                 command=self.redraw)
+            cb.pack(anchor="w")
+            self.show_widgets[key] = cb
+            if key == "profiles":
+                # Colouring belongs to the profile lines, so it sits with them.
+                row = ttk.Frame(side)
+                row.pack(anchor="w", fill=tk.X, padx=(18, 0))
+                self.profile_colour_label = ttk.Label(row, text="Colour by")
+                self.profile_colour_label.pack(side=tk.LEFT)
+                self.profile_colour_box = ttk.Combobox(
+                    row, state="readonly", width=12,
+                    values=list(PROFILE_COLOUR.keys()))
+                self.profile_colour_box.current(0)
+                self.profile_colour_box.pack(side=tk.LEFT, padx=4)
+                self.profile_colour_box.bind("<<ComboboxSelected>>",
+                                             lambda e: self.redraw())
 
         # -- Processing -------------------------------------------------------
         heading("Smoothing")
@@ -399,6 +421,11 @@ class SwathViewer(tk.Tk):
             return
         now = datetime.datetime.now()
         first_new = len(self.entries)
+        if first_new == 0:
+            # First result of the session: open showing what this run's saved
+            # charts show.  Never on a later load, which would silently change
+            # how the profiles already on screen are drawn.
+            self._seed_profile_colour(b.meta.get("config", {}))
         for part in b.parts:
             self.entries.append(Entry(part, b.meta, now, path))
             self.listbox.insert(tk.END, self.entries[-1].label)
@@ -537,6 +564,57 @@ class SwathViewer(tk.Tk):
         d, _ = transforms.reorient(first.distances, None, e.origin, e.flip)
         return d
 
+    def profile_colour(self) -> str:
+        """The chosen colouring mode for the individual profile lines."""
+        box = getattr(self, "profile_colour_box", None)
+        return PROFILE_COLOUR.get(box.get(), "single") if box else "single"
+
+    def _seed_profile_colour(self, config):
+        """Match the combobox to the run's Colour Profile Lines By setting.
+
+        Bundles written before this option existed have no such key, so they
+        open on the historic single colour.
+        """
+        box = getattr(self, "profile_colour_box", None)
+        if box is None:
+            return
+        mode = (config or {}).get("chart_profile_colour", "single")
+        for label, value in PROFILE_COLOUR.items():
+            if value == mode:
+                box.set(label)
+                return
+
+    def _sync_profile_controls(self, stats):
+        """Grey out the profile-line controls when there are no per-line samples.
+
+        All-cells sampling keeps only the per-station statistics, so there is
+        nothing to draw or colour; saying so beats a checkbox that does nothing.
+        """
+        box = getattr(self, "profile_colour_box", None)
+        if box is None:
+            return
+        first = next(iter(stats.values()), None)
+        available = first is not None and first.values is not None
+        box.configure(state="readonly" if available else "disabled")
+        self.profile_colour_label.configure(
+            text="Colour by" if available else "Colour by (all-cells: none)")
+        cb = self.show_widgets.get("profiles")
+        if cb is not None:
+            cb.configure(state="normal" if available else "disabled")
+        return available
+
+    def _side_note(self, stats, flip) -> str:
+        """One line naming which compass direction each side of the band faces."""
+        if self.profile_colour() == "single":
+            return ""
+        first = next(iter(stats.values()), None)
+        if first is None or first.values is None:
+            return ""
+        left, right = plotting.side_labels(first, flip)
+        if "(" not in left:
+            return "\nSides: left/right of the digitising direction"
+        return f"\nSides: {left}, {right}"
+
     # -- drawing --------------------------------------------------------------
 
     def redraw(self):
@@ -604,6 +682,7 @@ class SwathViewer(tk.Tk):
             if e.part.get(key) not in (None, "", 0):
                 cfg["swath_width" if key == "width" else key] = e.part[key]
         show = {k: v.get() for k, v in self.show_vars.items()}
+        self._sync_profile_controls(stats)
         d = self.display_distances(e, stats)
         self._display_d = d
         span = float(np.nanmax(d) - np.nanmin(d))
@@ -627,7 +706,8 @@ class SwathViewer(tk.Tk):
             thi_raster=e.thi_raster, thi_enhanced=self.star_var.get(),
             footer=footer, figure=self.figure, pct=e.pct, distances=d,
             cross_section=(None if xs is None else
-                           (None if xs.get("unavailable") else xs)))
+                           (None if xs.get("unavailable") else xs)),
+            profile_colour=self.profile_colour(), flip=e.flip)
         self._axes = axes
         n_rasters = len(stats)
         self._main_axes = axes[:n_rasters]
@@ -644,6 +724,7 @@ class SwathViewer(tk.Tk):
             f"Method: {cfg.get('method', '?')}   "
             f"P{e.pct[0]:g}/P{e.pct[1]:g}\n"
             f"CRS: {e.meta.get('crs', '')}"
+            + self._side_note(stats, e.flip)
             + (f"\nRun time {elapsed:.1f} s" if elapsed else ""))
 
     def _draw_overlays_single(self, e, stats, d):
@@ -934,7 +1015,8 @@ class SwathViewer(tk.Tk):
                     stats, title=e.title, show=show, show_thi=opts["thi"],
                     thi_raster=e.thi_raster, thi_enhanced=self.star_var.get(),
                     preset=opts["preset"], pct=e.pct, distances=d,
-                    cross_section=xs)
+                    cross_section=xs, profile_colour=self.profile_colour(),
+                    flip=e.flip)
             plotting.save_figure(fig, path, dpi=opts["dpi"])
             self.status.set(f"Saved {path}")
         except Exception as exc:

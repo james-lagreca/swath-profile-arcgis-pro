@@ -25,7 +25,41 @@ TEMPLATES = {
     "band": os.path.join(_HERE, "templates", "band.lyrx.json"),
     "transects": os.path.join(_HERE, "templates", "transects.lyrx.json"),
     "stations": os.path.join(_HERE, "templates", "stations.lyrx.json"),
+    "offsets": os.path.join(_HERE, "templates", "offsets.lyrx.json"),
 }
+
+#: Unique-value class label -> the ``plotting.PALETTE`` key it takes its colour
+#: from.  Patching at write time means the map symbology and the chart cannot
+#: drift apart when a colour is changed in one place.
+_CLASS_COLOURS = {
+    "Left of line": "side_left",
+    "Right of line": "side_right",
+    "On the line": "centre",
+}
+
+
+def _rgb255(colour):
+    """'#2C6FA8' -> [44, 111, 168, 100], the CIMRGBColor value list."""
+    h = colour.lstrip("#")
+    return [int(h[i:i + 2], 16) for i in (0, 2, 4)] + [100]
+
+
+def _apply_palette(ld):
+    """Colour a unique-value renderer's classes from the plotting palette."""
+    from .plotting import PALETTE
+
+    renderer = ld.get("renderer") or {}
+    if renderer.get("type") != "CIMUniqueValueRenderer":
+        return
+    for group in renderer.get("groups") or []:
+        for cls in group.get("classes") or []:
+            key = _CLASS_COLOURS.get(cls.get("label"))
+            if key is None:
+                continue
+            for layer in ((cls.get("symbol") or {}).get("symbol") or {}
+                          ).get("symbolLayers") or []:
+                if "color" in layer:
+                    layer["color"]["values"] = _rgb255(PALETTE[key])
 
 
 def _split_gdb_path(fc_path):
@@ -82,6 +116,8 @@ def build_layer_file(kind, fc_path, out_path, layer_name=None, chart=None,
         ld["charts"] = [chart]
     else:
         ld.pop("charts", None)
+
+    _apply_palette(ld)
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as fh:

@@ -196,6 +196,13 @@ class SwathStats:
     z_plo: np.ndarray | None = None  # configurable low percentile (default 5)
     z_phi: np.ndarray | None = None  # configurable high percentile (default 95)
     z_centre: np.ndarray | None = None  # the profile along the baseline itself
+    # Compass bearing (degrees from north) of the +offset side, i.e. the left
+    # of the digitising direction, and the circular resultant that says how
+    # straight the baseline is.  Together they let a chart legend say "Left (W)"
+    # instead of leaving the reader to guess which side is which, and say
+    # nothing at all when the line bends too much for one bearing to be true.
+    normal_bearing: float | None = None
+    normal_resultant: float | None = None
 
     @property
     def n_stations(self) -> int:

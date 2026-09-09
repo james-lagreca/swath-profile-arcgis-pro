@@ -19,11 +19,19 @@ import warnings
 import numpy as np
 
 __all__ = ["PALETTE", "SERIES", "DEFAULT_SHOW", "PRESETS", "OVERLAY_COLOURS",
+           "PROFILE_COLOUR_MODES", "side_labels", "profile_colours",
            "use_agg", "preset_context", "build_figure", "build_overlay_figure",
            "build_ridgeline_figure", "draw_cross_section", "save_figure"]
 
 PALETTE = {
     "profiles": "#C8C8C8",
+    # The two sides of the baseline.  A cool/warm pair rather than the usual
+    # red/green, so it survives both common forms of colour blindness, and both
+    # members are kept clear of the headline series: the blue is lighter than
+    # the mean's #01008a, and the sienna is darker than the max line's pale
+    # #f8ba81, so neither disappears into a statistic where they overlap.
+    "side_left": "#2C6FA8",
+    "side_right": "#B4632A",
     "min": "#4dd48a",
     "max": "#f8ba81",
     "mean": "#01008a",
@@ -61,6 +69,87 @@ PRESETS = {
     "Journal double column": {"width_mm": 170.0, "font": 8},
     "Poster": {"width_mm": 300.0, "font": 14},
 }
+
+
+#: How the individual offset profiles are coloured.  "single" is the historic
+#: flat grey; "side" splits them by which side of the baseline they came from;
+#: "ramp" keeps the two side hues but fades them towards the baseline, so the
+#: distance out across the swath is readable too.
+PROFILE_COLOUR_MODES = ("single", "side", "ramp")
+
+#: Below this circular resultant the baseline bends too much for one compass
+#: bearing to describe "the left side" honestly, so the label is left off.
+_BEARING_MIN_RESULTANT = 0.97
+
+
+def side_labels(stats, flip: bool = False):
+    """Legend labels for the two sides of the baseline.
+
+    Left and right are relative to the direction the line was digitised, which
+    is invisible on a map, so a compass point is appended when the baseline is
+    straight enough for one to mean anything: ``("Left (W)", "Right (E)")``.
+    On a curved baseline the bare words are returned instead of a bearing that
+    would be wrong at both ends.
+
+    The two words are *not* swapped when the display is flipped.  Flipping
+    reverses the direction you are looking along the line, so the ground on
+    your left changes but the left of the chart does not: ``profile_colours``
+    negates the offsets to match, and the left colour keeps the word "Left".
+    What does change is the compass point, which turns through 180 degrees - a
+    line drawn due north reads "Left (W)" and, flipped, "Left (E)".
+    """
+    from . import geometry as _geom
+
+    left, right = "Left of line", "Right of line"
+    bearing = getattr(stats, "normal_bearing", None)
+    resultant = getattr(stats, "normal_resultant", None)
+    if bearing is not None and np.isfinite(bearing) \
+            and (resultant is None or resultant >= _BEARING_MIN_RESULTANT):
+        b = float(bearing) + (180.0 if flip else 0.0)
+        lp, rp = _geom.compass_point(b), _geom.compass_point(b + 180.0)
+        if lp and rp:
+            left, right = f"Left ({lp})", f"Right ({rp})"
+    return left, right
+
+
+def profile_colours(offsets, mode: str = "side", flip: bool = False):
+    """Per-profile colours for the individual offset lines.
+
+    Returns a list of colours, one per row of ``stats.values``, in the same
+    order.  The centre line (offset 0, present whenever the profile count is
+    odd) is the baseline itself and takes the baseline's near-black rather than
+    either side's colour.
+    """
+    from . import geometry as _geom
+
+    o = np.asarray(offsets, dtype=np.float64)
+    if flip:
+        o = -o
+    side = _geom.side_of(o)
+    if mode == "ramp":
+        span = float(np.nanmax(np.abs(o))) if o.size else 0.0
+        if not np.isfinite(span) or span <= 0.0:
+            span = 1.0
+        out = []
+        for value, s in zip(o, side):
+            if s == _geom.CENTRE:
+                out.append(PALETTE["centre"])
+                continue
+            base = PALETTE["side_left"] if s == _geom.LEFT else PALETTE["side_right"]
+            out.append(_fade(base, abs(float(value)) / span))
+        return out
+    return [PALETTE["centre"] if s == _geom.CENTRE else
+            (PALETTE["side_left"] if s == _geom.LEFT else PALETTE["side_right"])
+            for s in side]
+
+
+def _fade(colour, strength: float):
+    """Blend *colour* towards a light neutral; strength 1 keeps it unchanged."""
+    from matplotlib.colors import to_rgb
+
+    t = float(np.clip(strength, 0.0, 1.0)) * 0.75 + 0.25
+    r, g, b = to_rgb(colour)
+    return (r * t + (1 - t) * 0.88, g * t + (1 - t) * 0.88, b * t + (1 - t) * 0.88)
 
 
 def use_agg():
@@ -114,15 +203,27 @@ def _x_scale(stats):
 
 
 def _draw_panel(ax, stats, show, y_label, x_scale=1.0, pct=(5, 95),
-                distances=None):
+                distances=None, profile_colour="single", flip=False):
     d = (stats.distances if distances is None else distances) / x_scale
     ax.set_facecolor("white")
 
     if show.get("profiles") and stats.values is not None and stats.n_total > 1:
         # Individual lines are context, not data to read off: keep them faint.
-        for row in stats.values:
-            ax.plot(d, row, color=PALETTE["profiles"], linewidth=0.4,
-                    alpha=0.6, zorder=1)
+        # All-cells (zonal) mode has no per-line samples, so stats.values is
+        # None there and this whole block, colouring included, is skipped.
+        offsets = getattr(stats, "offsets", None)
+        usable = (profile_colour in ("side", "ramp") and offsets is not None
+                  and len(offsets) == len(stats.values))
+        colours = (profile_colours(offsets, profile_colour, flip) if usable
+                   else [PALETTE["profiles"]] * len(stats.values))
+        for row, colour in zip(stats.values, colours):
+            ax.plot(d, row, color=colour, linewidth=0.4, alpha=0.6, zorder=1)
+        if usable:
+            # The faint lines are too thin to read in a legend, so label them
+            # with proxies at a visible weight.
+            left, right = side_labels(stats, flip)
+            ax.plot([], [], color=PALETTE["side_left"], lw=1.2, label=left)
+            ax.plot([], [], color=PALETTE["side_right"], lw=1.2, label=right)
 
     if show.get("min") and show.get("max"):
         ax.fill_between(d, stats.z_min, stats.z_max, color=PALETTE["fill"],
@@ -186,8 +287,14 @@ def _draw_thi(ax, stats, enhanced, x_scale=1.0, distances=None, color=None,
     _style_axes(ax)
 
 
-def draw_cross_section(ax, xs, title=None):
-    """Draw an across-track cross-section (from ``transforms.cross_section``)."""
+def draw_cross_section(ax, xs, title=None, profile_colour="single"):
+    """Draw an across-track cross-section (from ``transforms.cross_section``).
+
+    With side colouring on, the sample markers take the same two colours as the
+    profile lines, so the halves of the cross-section match the halves of the
+    main chart.  The offsets in *xs* are already flipped if the display is, so
+    no further flip is applied here.
+    """
     ax.clear()
     ax.set_facecolor("white")
     if xs is None:
@@ -199,7 +306,9 @@ def draw_cross_section(ax, xs, title=None):
     o, z = xs["offsets"], xs["z"]
     order = np.argsort(o)
     ax.plot(o[order], z[order], color=PALETTE["mean"], lw=1.0, zorder=3)
-    ax.scatter(o, z, s=6, color=PALETTE["mean"], zorder=4)
+    marker_colour = (profile_colours(o, profile_colour)
+                     if profile_colour in ("side", "ramp") else PALETTE["mean"])
+    ax.scatter(o, z, s=6, color=marker_colour, zorder=4)
     ax.axhline(xs["z_mean"], color=PALETTE["mean"], lw=0.6, ls=(0, (4, 2)),
                alpha=0.7)
     ax.axhline(xs["z_min"], color=PALETTE["min"], lw=0.6, ls=(0, (2, 2)))
@@ -214,7 +323,8 @@ def draw_cross_section(ax, xs, title=None):
 def build_figure(by_raster, *, title="", show=None, show_thi=True,
                  thi_raster=None, thi_enhanced=False, footer="",
                  figsize=None, dpi=110, figure=None, preset=None,
-                 pct=(5, 95), distances=None, cross_section=None):
+                 pct=(5, 95), distances=None, cross_section=None,
+                 profile_colour="single", flip=False):
     """Build a stacked multi-panel swath figure.
 
     One panel per raster on a shared X axis, plus an optional THi sub-panel.
@@ -260,7 +370,8 @@ def build_figure(by_raster, *, title="", show=None, show_thi=True,
             ax = fig.add_subplot(gs[i], sharex=ax0) if ax0 is not None \
                 else fig.add_subplot(gs[i])
             ax0 = ax0 or ax
-            _draw_panel(ax, by_raster[name], show, name, x_scale, pct, distances)
+            _draw_panel(ax, by_raster[name], show, name, x_scale, pct, distances,
+                        profile_colour, flip)
             if i == 0 and title:
                 ax.set_title(title, pad=8)
             if i < len(ratios) - 1:
@@ -281,7 +392,7 @@ def build_figure(by_raster, *, title="", show=None, show_thi=True,
                            ncol=min(len(handles), 6))
 
         if xs_ax is not None:
-            draw_cross_section(xs_ax, cross_section)
+            draw_cross_section(xs_ax, cross_section, profile_colour=profile_colour)
 
         if footer:
             fig.text(0.01, 0.005, footer, fontsize="x-small", color="#888888",

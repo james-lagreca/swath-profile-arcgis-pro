@@ -175,6 +175,36 @@ class OutputsV2Test(unittest.TestCase):
         tool.updateParameters(params)
         tool.updateMessages(params)
 
+    def test_sketch_parameter_is_identical_on_every_dialog_open(self):
+        """The draw-a-baseline sketch must not depend on hidden process state.
+
+        Regression test.  The sketch parameter used to be given a POLYLINE
+        template created in the "memory" workspace.  That workspace lives as
+        long as the ArcGIS Pro process, so the first dialog open created the
+        template and bound the parameter to it, and every later open raised
+        ERROR 000258 (already exists), swallowed it, and left the parameter
+        unbound - so drawing worked only every other time the tool was opened.
+        Opening the dialog must now produce the same parameter every time,
+        whatever ``overwriteOutput`` happens to be, and it must still restrict
+        the sketch to lines.
+        """
+        module = SourceFileLoader("swpyt_test3", os.path.join(ROOT, "SwathProfile.pyt")
+                                  ).load_module()
+        seen = []
+        for overwrite in (False, True, False):
+            arcpy.env.overwriteOutput = overwrite
+            draw = next(p for p in module.SwathProfileTool().getParameterInfo()
+                        if p.name == "draw_lines")
+            seen.append((draw.value, [str(g).lower() for g in draw.filter.list]))
+        arcpy.env.overwriteOutput = True
+
+        self.assertEqual(len(set(map(str, seen))), 1, f"sketch differs by open: {seen}")
+        for value, geometries in seen:
+            self.assertIsNone(value, "a bound template disables the sketch tool")
+            self.assertEqual(geometries, ["polyline"])
+        self.assertFalse(arcpy.Exists("memory/swath_baseline_template"),
+                         "the dialog must not leave a template in the memory workspace")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

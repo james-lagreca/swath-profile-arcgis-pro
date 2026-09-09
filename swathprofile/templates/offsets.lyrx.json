@@ -1,0 +1,281 @@
+{
+  "type": "CIMLayerDocument",
+  "version": "3.4.0",
+  "build": 55405,
+  "layers": [
+    "CIMPATH=Internal_Map/transects.json"
+  ],
+  "layerDefinitions": [
+    {
+      "type": "CIMFeatureLayer",
+      "name": "Offset lines",
+      "uRI": "CIMPATH=Internal_Map/transects.json",
+      "sourceModifiedTime": {
+        "type": "TimeInstant"
+      },
+      "metadataURI": "CIMPATH=Metadata/6ed82174001588186f51a7c2e533f04b.xml",
+      "useSourceMetadata": true,
+      "description": "transects",
+      "expanded": true,
+      "layerType": "Operational",
+      "showLegends": true,
+      "visibility": true,
+      "displayCacheType": "Permanent",
+      "maxDisplayCacheAge": 5,
+      "showPopups": true,
+      "serviceLayerID": -1,
+      "refreshRate": -1,
+      "refreshRateUnit": "esriTimeUnitsSeconds",
+      "blendingMode": "Alpha",
+      "allowDrapingOnIntegratedMesh": true,
+      "autoGenerateFeatureTemplates": true,
+      "featureTable": {
+        "type": "CIMFeatureTable",
+        "displayField": "LINE_NAME",
+        "editable": true,
+        "fieldDescriptions": [
+          {
+            "type": "CIMFieldDescription",
+            "alias": "OBJECTID",
+            "fieldName": "OBJECTID",
+            "numberFormat": {
+              "type": "CIMNumericFormat",
+              "alignmentOption": "esriAlignRight",
+              "alignmentWidth": 0,
+              "roundingOption": "esriRoundNumberOfDecimals",
+              "roundingValue": 0
+            },
+            "visible": true,
+            "searchMode": "Exact"
+          },
+          {
+            "type": "CIMFieldDescription",
+            "alias": "Shape",
+            "fieldName": "Shape",
+            "visible": true,
+            "searchMode": "Exact"
+          },
+          {
+            "type": "CIMFieldDescription",
+            "alias": "Shape_Length",
+            "fieldName": "Shape_Length",
+            "numberFormat": {
+              "type": "CIMNumericFormat",
+              "alignmentOption": "esriAlignRight",
+              "alignmentWidth": 0,
+              "roundingOption": "esriRoundNumberOfDecimals",
+              "roundingValue": 6
+            },
+            "visible": true,
+            "searchMode": "Exact"
+          },
+          {
+            "type": "CIMFieldDescription",
+            "alias": "LINE_NAME",
+            "fieldName": "LINE_NAME",
+            "visible": true,
+            "searchMode": "Exact"
+          }
+        ],
+        "dataConnection": {
+          "type": "CIMStandardDataConnection",
+          "workspaceConnectionString": "DATABASE=.\\t.gdb",
+          "workspaceFactory": "FileGDB",
+          "dataset": "transects",
+          "datasetType": "esriDTFeatureClass"
+        },
+        "studyAreaSpatialRel": "esriSpatialRelUndefined",
+        "searchOrder": "esriSearchOrderSpatial"
+      },
+      "htmlPopupEnabled": true,
+      "selectable": true,
+      "featureCacheType": "Session",
+      "displayFiltersType": "ByScale",
+      "featureBlendingMode": "Alpha",
+      "layerEffectsMode": "Layer",
+      "labelVisibility": false,
+      "renderer": {
+        "type": "CIMUniqueValueRenderer",
+        "defaultLabel": "Other",
+        "defaultSymbol": {
+          "type": "CIMSymbolReference",
+          "symbol": {
+            "type": "CIMLineSymbol",
+            "symbolLayers": [
+              {
+                "type": "CIMSolidStroke",
+                "enable": true,
+                "capStyle": "Round",
+                "joinStyle": "Round",
+                "lineStyle3D": "Strip",
+                "miterLimit": 10,
+                "width": 0.7,
+                "height3D": 1,
+                "anchor3D": "Center",
+                "color": {
+                  "type": "CIMRGBColor",
+                  "values": [
+                    190,
+                    190,
+                    190,
+                    100
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "defaultSymbolPatch": "Default",
+        "useDefaultSymbol": true,
+        "fields": [
+          "SIDE"
+        ],
+        "groups": [
+          {
+            "type": "CIMUniqueValueGroup",
+            "heading": "Side of baseline",
+            "classes": [
+              {
+                "type": "CIMUniqueValueClass",
+                "label": "Left of line",
+                "patch": "Default",
+                "visible": true,
+                "symbol": {
+                  "type": "CIMSymbolReference",
+                  "symbol": {
+                    "type": "CIMLineSymbol",
+                    "symbolLayers": [
+                      {
+                        "type": "CIMSolidStroke",
+                        "enable": true,
+                        "capStyle": "Round",
+                        "joinStyle": "Round",
+                        "lineStyle3D": "Strip",
+                        "miterLimit": 10,
+                        "width": 1.0,
+                        "height3D": 1,
+                        "anchor3D": "Center",
+                        "color": {
+                          "type": "CIMRGBColor",
+                          "values": [
+                            128,
+                            128,
+                            128,
+                            100
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                "values": [
+                  {
+                    "type": "CIMUniqueValue",
+                    "fieldValues": [
+                      "Left"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "CIMUniqueValueClass",
+                "label": "On the line",
+                "patch": "Default",
+                "visible": true,
+                "symbol": {
+                  "type": "CIMSymbolReference",
+                  "symbol": {
+                    "type": "CIMLineSymbol",
+                    "symbolLayers": [
+                      {
+                        "type": "CIMSolidStroke",
+                        "enable": true,
+                        "capStyle": "Round",
+                        "joinStyle": "Round",
+                        "lineStyle3D": "Strip",
+                        "miterLimit": 10,
+                        "width": 1.4,
+                        "height3D": 1,
+                        "anchor3D": "Center",
+                        "color": {
+                          "type": "CIMRGBColor",
+                          "values": [
+                            128,
+                            128,
+                            128,
+                            100
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                "values": [
+                  {
+                    "type": "CIMUniqueValue",
+                    "fieldValues": [
+                      "Centre"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "CIMUniqueValueClass",
+                "label": "Right of line",
+                "patch": "Default",
+                "visible": true,
+                "symbol": {
+                  "type": "CIMSymbolReference",
+                  "symbol": {
+                    "type": "CIMLineSymbol",
+                    "symbolLayers": [
+                      {
+                        "type": "CIMSolidStroke",
+                        "enable": true,
+                        "capStyle": "Round",
+                        "joinStyle": "Round",
+                        "lineStyle3D": "Strip",
+                        "miterLimit": 10,
+                        "width": 1.0,
+                        "height3D": 1,
+                        "anchor3D": "Center",
+                        "color": {
+                          "type": "CIMRGBColor",
+                          "values": [
+                            128,
+                            128,
+                            128,
+                            100
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                },
+                "values": [
+                  {
+                    "type": "CIMUniqueValue",
+                    "fieldValues": [
+                      "Right"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "scaleSymbols": true,
+      "snappable": true
+    }
+  ],
+  "binaryReferences": [
+    {
+      "type": "CIMBinaryReference",
+      "uRI": "CIMPATH=Metadata/6ed82174001588186f51a7c2e533f04b.xml",
+      "data": "<?xml version=\"1.0\"?>\r\n<metadata xml:lang=\"en\"><Esri><CreaDate>20260902</CreaDate><CreaTime>15230700</CreaTime><ArcGISFormat>1.0</ArcGISFormat><SyncOnce>TRUE</SyncOnce></Esri><dataIdInfo><idCitation><resTitle>transects</resTitle></idCitation><idAbs>transects</idAbs><idCredit></idCredit><idPurp></idPurp><resConst><Consts><useLimit></useLimit></Consts></resConst></dataIdInfo></metadata>\r\n"
+    }
+  ],
+  "rGBColorProfile": "sRGB IEC61966-2.1",
+  "cMYKColorProfile": "U.S. Web Coated (SWOP) v2"
+}

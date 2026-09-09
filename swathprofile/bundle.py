@@ -32,6 +32,14 @@ _REQUIRED = ("distances", "z_min", "z_max", "z_mean", "z_median", "z_q1",
 _OPTIONAL = ("z_plo", "z_phi", "z_centre")
 
 
+def _finite(value):
+    """JSON cannot hold NaN or numpy scalars; a missing bearing becomes null."""
+    if value is None:
+        return None
+    v = float(value)
+    return v if v == v and abs(v) != float("inf") else None
+
+
 def save_bundle(path, result, title="", elapsed=None):
     """Write *result* to *path*."""
     arrays, entries = {}, []
@@ -61,6 +69,11 @@ def save_bundle(path, result, title="", elapsed=None):
                         "width": float(g.get("width", 0.0) or 0.0),
                         "n_lines": int(g.get("n_lines", 0) or 0),
                         "method": str(g.get("method", "")),
+                        # Which compass direction the +offset side faces, and
+                        # how straight the baseline is.  Per part, not per
+                        # raster: it is a property of the line, not the DEM.
+                        "normal_bearing": _finite(g.get("normal_bearing")),
+                        "normal_resultant": _finite(g.get("normal_resultant")),
                         "rasters": rasters})
 
     cfg = json.loads(result.config.to_json()) if result.config else {}
@@ -125,7 +138,9 @@ def load_bundle(path):
                 by_raster[r["name"]] = SwathStats(
                     n_total=r["n_total"], max_relief=r["max_relief"],
                     values=values, offsets=z[f"g{i}_offsets"],
-                    name=r["name"], **kw)
+                    name=r["name"],
+                    normal_bearing=entry.get("normal_bearing"),
+                    normal_resultant=entry.get("normal_resultant"), **kw)
             parts.append({
                 "oid": entry["oid"], "part_id": entry["part_id"],
                 "name": entry.get("name", ""),

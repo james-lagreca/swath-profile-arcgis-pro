@@ -365,6 +365,16 @@ def _create(out_path, geom_type, sr, fields, has_z=False, kind="fc"):
     Returns ``(path, via_memory)``.  If the geodatabase is inside an edit
     session the direct creation fails (ERROR 000496); the feature class is then
     built in the ``memory`` workspace and copied in by :func:`_finalise_fc`.
+
+    IMPORTANT: the template is keyed only by *kind*, and it is reused whenever
+    it already exists.  A results geodatabase written by an earlier version
+    therefore still holds that version's fields.  **When the field list for a
+    kind changes, change its** ``kind`` **string too** (that is why the offset
+    lines are ``offsets_side``), or every user with an existing results
+    geodatabase gets the old schema and the insert cursor fails on the new
+    field.  Hashing the fields into the name would do this automatically, but
+    it would force a fresh template for every kind on the first run in every
+    existing geodatabase, at 20-35 s per call in a slow project.
     """
     import uuid
 
@@ -438,20 +448,33 @@ def write_band_polygons(out_path, rings, sr, messenger=None):
 
 
 def write_offset_lines(out_path, lines, sr, messenger=None):
-    """Write the N parallel profile lines per baseline part."""
+    """Write the N parallel profile lines per baseline part.
+
+    ``SIDE`` records which side of the baseline each line came from, in the same
+    words the chart legend uses, so a unique-value renderer on it reproduces the
+    chart's colours on the map.  It is a text field rather than a reading of the
+    signed ``OFFSET`` because Pro's unique-value renderer needs a categorical
+    field, and because a definition query on ``SIDE = 'Left'`` cannot make the
+    ``>`` / ``>=`` mistake at the centre line.
+    """
     import arcpy
+
+    from .geometry import SIDE_NAMES, side_of
 
     fc, via_memory = _create(out_path, "POLYLINE", sr, [
         ("LINE_OID", "LONG"), ("PART_ID", "LONG"), ("LINE_NAME", "TEXT", 64),
         ("LINE_IDX", "LONG"), ("OFFSET", "DOUBLE"), ("N_VALID", "LONG"),
-    ], kind="offsets")
+        ("SIDE", "TEXT", 8),
+    ], kind="offsets_side")
     with arcpy.da.InsertCursor(fc, ["SHAPE@", "LINE_OID", "PART_ID", "LINE_NAME",
-                                    "LINE_IDX", "OFFSET", "N_VALID"]) as cur:
+                                    "LINE_IDX", "OFFSET", "N_VALID",
+                                    "SIDE"]) as cur:
         for ln in lines:
             arr = arcpy.Array([arcpy.Point(float(x), float(y)) for x, y in ln["xy"]])
+            side = SIDE_NAMES[int(side_of([ln["offset"]])[0])]
             cur.insertRow([arcpy.Polyline(arr, sr), ln["oid"], ln["part_id"],
                            str(ln.get("name", ""))[:64], ln["index"], ln["offset"],
-                           ln["n_valid"]])
+                           ln["n_valid"], side])
     fc = _finalise_fc(fc, out_path, via_memory)
     if messenger:
         messenger.info(f"  Offset lines -> {out_path}")

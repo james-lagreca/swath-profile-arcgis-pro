@@ -13,6 +13,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from swathprofile import geometry as geom          # noqa: E402
+from swathprofile import plotting                  # noqa: E402
 from swathprofile import stats as st               # noqa: E402
 from swathprofile import transforms as tf          # noqa: E402
 from swathprofile.config import SwathConfig, estimate_run   # noqa: E402
@@ -96,6 +97,131 @@ class TransformsTest(unittest.TestCase):
         self.assertAlmostEqual(m["length"], np.hypot(100.0, 10.0))
         v = tf.measure((5.0, 0.0), (5.0, 3.0))
         self.assertEqual(v["angle_deg"], 90.0)
+
+
+class SideColouringTest(unittest.TestCase):
+    """Colouring the profile lines by which side of the baseline they came from."""
+
+    @staticmethod
+    def _north_line(m=40):
+        """A baseline drawn due north, so its left side faces west."""
+        return np.column_stack([np.zeros(m), np.linspace(0.0, 400.0, m)])
+
+    def test_side_of_splits_evenly_and_puts_the_centre_line_on_the_baseline(self):
+        odd = geom.side_of(np.linspace(-150.0, 150.0, 21))
+        self.assertEqual(int((odd == geom.LEFT).sum()), 10)
+        self.assertEqual(int((odd == geom.RIGHT).sum()), 10)
+        self.assertEqual(int((odd == geom.CENTRE).sum()), 1)
+        # The centre class must be the same line the engine calls z_centre.
+        offs = np.linspace(-1000.0, 1000.0, 101)
+        self.assertEqual(int(np.flatnonzero(geom.side_of(offs) == geom.CENTRE)[0]),
+                         int(np.argmin(np.abs(offs))))
+        # An even count places no line on the baseline.
+        self.assertEqual(int((geom.side_of(np.linspace(-8.0, 8.0, 4))
+                              == geom.CENTRE).sum()), 0)
+
+    def test_positive_offsets_are_left_of_the_digitising_direction(self):
+        # Walking north, your left hand points west: a positive offset must
+        # land at negative x.
+        c = self._north_line()
+        _, nrm = geom.tangents_normals(c)
+        p, offs = geom.offset_grid(c, nrm, 100.0, 3)
+        self.assertGreater(offs[-1], 0.0)
+        self.assertLess(p[-1, 0, 0], 0.0)                      # +offset -> west
+        bearing, resultant = geom.mean_normal_bearing(nrm)
+        self.assertAlmostEqual(bearing, 270.0, places=6)
+        self.assertAlmostEqual(resultant, 1.0, places=9)
+        self.assertEqual(geom.compass_point(bearing), "W")
+
+    def test_compass_points_and_wrapping(self):
+        for bearing, expected in ((0.0, "N"), (90.0, "E"), (180.0, "S"),
+                                  (270.0, "W"), (359.9, "N"), (22.5, "NNE"),
+                                  (360.0 + 45.0, "NE")):
+            self.assertEqual(geom.compass_point(bearing), expected, bearing)
+        self.assertEqual(geom.compass_point(float("nan")), "")
+
+    def test_a_curved_baseline_gets_no_compass_label(self):
+        th = np.linspace(0.0, np.pi / 2, 60)
+        c = np.column_stack([np.cos(th), np.sin(th)]) * 100.0
+        _, nrm = geom.tangents_normals(c)
+        bearing, resultant = geom.mean_normal_bearing(nrm)
+        self.assertLess(resultant, 0.97)
+        s, _ = _plane_stats()
+        s.normal_bearing, s.normal_resultant = bearing, resultant
+        # No single bearing is honest here, so the words stand alone.
+        for label in plotting.side_labels(s):
+            self.assertNotIn("(", label)
+
+    def test_labels_name_the_side_the_ground_is_actually_on(self):
+        c = self._north_line()
+        _, nrm = geom.tangents_normals(c)
+        p, offs = geom.offset_grid(c, nrm, 200.0, 11)
+        z = 100.0 + 0.05 * p[..., 0]              # ground rises to the east
+        s = st.compute_stats(z, np.linspace(0.0, 400.0, 40), offsets=offs)
+        s.normal_bearing, s.normal_resultant = geom.mean_normal_bearing(nrm)
+
+        for flip in (False, True):
+            colours = plotting.profile_colours(offs, "side", flip=flip)
+            left_rows = [i for i, col in enumerate(colours)
+                         if col == plotting.PALETTE["side_left"]]
+            right_rows = [i for i, col in enumerate(colours)
+                          if col == plotting.PALETTE["side_right"]]
+            higher = ("left" if s.values[left_rows].mean()
+                      > s.values[right_rows].mean() else "right")
+            label = plotting.side_labels(s, flip)[0 if higher == "left" else 1]
+            # Whichever way round the display is, the higher ground is the east.
+            self.assertIn("(E)", label, f"flip={flip}")
+
+    def test_flipping_swaps_which_colour_each_side_gets(self):
+        offs = np.linspace(-50.0, 50.0, 5)
+        plain = plotting.profile_colours(offs, "side")
+        flipped = plotting.profile_colours(offs, "side", flip=True)
+        self.assertEqual(plain[0], flipped[-1])
+        self.assertEqual(plain[-1], flipped[0])
+        self.assertEqual(plain[2], plotting.PALETTE["centre"])
+        self.assertEqual(flipped[2], plotting.PALETTE["centre"])
+
+    def test_ramp_keeps_the_side_hues_and_fades_towards_the_baseline(self):
+        from matplotlib.colors import to_rgb
+
+        offs = np.linspace(-100.0, 100.0, 11)
+        ramp = plotting.profile_colours(offs, "ramp")
+        self.assertEqual(len(set(map(str, ramp))), len(offs))
+        outer, inner = to_rgb(ramp[-1]), to_rgb(ramp[-2])
+        far = to_rgb(plotting.PALETTE["side_left"])
+        # The outermost line is the closest to the pure side colour.
+        self.assertLess(sum((a - b) ** 2 for a, b in zip(outer, far)),
+                        sum((a - b) ** 2 for a, b in zip(inner, far)))
+
+    def test_figure_legend_names_both_sides_and_default_is_unchanged(self):
+        c = self._north_line()
+        _, nrm = geom.tangents_normals(c)
+        p, offs = geom.offset_grid(c, nrm, 100.0, 9)
+        z = 50.0 + 0.01 * p[..., 1]
+        s = st.compute_stats(z, np.linspace(0.0, 400.0, 40), offsets=offs)
+        s.normal_bearing, s.normal_resultant = geom.mean_normal_bearing(nrm)
+
+        fig, axes = plotting.build_figure({"dem": s}, profile_colour="side")
+        labels = [t.get_text() for t in axes[0].get_legend().get_texts()]
+        self.assertIn("Left (W)", labels)
+        self.assertIn("Right (E)", labels)
+
+        # Default: no side entries, and the lines keep the historic grey.
+        fig2, axes2 = plotting.build_figure({"dem": s})
+        labels2 = [t.get_text() for t in axes2[0].get_legend().get_texts()]
+        self.assertNotIn("Left (W)", labels2)
+        greys = [ln for ln in axes2[0].get_lines()
+                 if ln.get_color() == plotting.PALETTE["profiles"]]
+        self.assertEqual(len(greys), len(offs))
+
+    def test_all_cells_mode_has_nothing_to_colour_and_does_not_raise(self):
+        s, d = _plane_stats()
+        s.values, s.offsets = None, None          # what zonal sampling produces
+        fig, axes = plotting.build_figure({"dem": s}, profile_colour="side")
+        labels = [t.get_text() for t in axes[0].get_legend().get_texts()]
+        self.assertNotIn("Left of line", labels)
+        for text in labels:
+            self.assertFalse(text.startswith("Left ("))
 
 
 class TransectsTest(unittest.TestCase):

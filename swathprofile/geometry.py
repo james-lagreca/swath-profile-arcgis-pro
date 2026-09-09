@@ -33,7 +33,19 @@ __all__ = [
     "fold_mask",
     "transects_along",
     "band_ring",
+    "LEFT",
+    "CENTRE",
+    "RIGHT",
+    "SIDE_NAMES",
+    "side_of",
+    "mean_normal_bearing",
+    "compass_point",
 ]
+
+#: Side codes for a signed cross-track offset.  Positive offsets lie to the
+#: LEFT of the digitising direction (see the module docstring).
+LEFT, CENTRE, RIGHT = 1, 0, -1
+SIDE_NAMES = {LEFT: "Left", CENTRE: "Centre", RIGHT: "Right"}
 
 
 def _as_xy(xy) -> np.ndarray:
@@ -311,6 +323,65 @@ def transects_along(xy, spacing: float, length: float, side: str = "both",
 
     return {"centres": centres, "ends": ends, "dist_along": positions,
             "azimuth": azimuth, "tangents": t_k, "normals": n_k}
+
+
+def side_of(offsets) -> np.ndarray:
+    """Classify signed cross-track offsets as left, centre or right.
+
+    Returns an int array of :data:`LEFT` (+1), :data:`CENTRE` (0) or
+    :data:`RIGHT` (-1).  Positive offsets are to the left of the digitising
+    direction because ``normal = (-t_y, t_x)``.
+
+    The centre test is ``np.isclose(offset, 0)``, deliberately the same test the
+    engine uses to pick the centre line for ``z_centre``: with an odd number of
+    profiles the middle line *is* the baseline profile, and the two must never
+    disagree about which line that is.  ``linspace`` does not always land
+    exactly on zero, which is why this is a tolerance and not ``== 0``.
+    """
+    o = np.asarray(offsets, dtype=np.float64)
+    side = np.where(o > 0.0, LEFT, RIGHT).astype(np.int8)
+    side[np.isclose(o, 0.0)] = CENTRE
+    return side
+
+
+def mean_normal_bearing(nrm):
+    """Mean compass bearing of the left-normal direction, and how tight it is.
+
+    Returns ``(bearing_degrees, resultant)``.  *bearing* is degrees clockwise
+    from north pointing along the +offset (left) side; *resultant* is the
+    circular resultant length in [0, 1]: 1.0 for a perfectly straight baseline,
+    falling as the line bends and the "left side" stops pointing one way.
+    Callers should not show a compass label when the resultant is low, because
+    on a curved baseline no single bearing is honest.
+
+    A plain arithmetic mean of bearings is wrong across the 0/360 wrap, so this
+    averages the unit vectors instead.
+    """
+    n = np.asarray(nrm, dtype=np.float64)
+    if n.ndim != 2 or n.shape[1] != 2 or len(n) == 0:
+        raise GeometryError("Normals must be an (M, 2) array.")
+    norm = np.hypot(n[:, 0], n[:, 1])
+    good = norm > 1e-12
+    if not good.any():
+        return float("nan"), 0.0
+    u = n[good] / norm[good, None]
+    mx, my = float(u[:, 0].mean()), float(u[:, 1].mean())
+    resultant = float(np.hypot(mx, my))
+    if resultant < 1e-12:
+        return float("nan"), 0.0
+    return float(np.degrees(np.arctan2(mx, my)) % 360.0), resultant
+
+
+_COMPASS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+
+
+def compass_point(bearing) -> str:
+    """16-point compass abbreviation for a bearing in degrees from north."""
+    b = float(bearing)
+    if not np.isfinite(b):
+        return ""
+    return _COMPASS[int((b % 360.0) / 22.5 + 0.5) % 16]
 
 
 def band_ring(c: np.ndarray, nrm: np.ndarray, width: float) -> np.ndarray:

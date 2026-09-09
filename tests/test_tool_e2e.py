@@ -9,6 +9,7 @@ would call it, minus the map and the viewer window.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -22,6 +23,7 @@ sys.path.insert(0, ROOT)
 
 import arcpy  # noqa: E402
 
+from swathprofile import plotting                      # noqa: E402
 from swathprofile.messaging import CollectingMessenger  # noqa: E402
 
 from . import synth_arcpy as synth  # noqa: E402
@@ -96,9 +98,31 @@ class ToolEndToEndTest(unittest.TestCase):
             os.path.join(self.out_gdb, "out_stations"))[0]), 405)
 
         # Every styled output got a layer file; the stations one carries the chart.
-        for name in ("out_band", "out_stations", "out_transects"):
+        for name in ("out_band", "out_stations", "out_transects", "out_offset_lines"):
             self.assertTrue(pr[name].symbology and os.path.exists(pr[name].symbology),
                             name)
+
+        # The offset lines say which side of the baseline each came from, and
+        # the layer file symbolises on that field in the chart's colours.
+        offsets_fc = os.path.join(self.out_gdb, "out_offset_lines")
+        rows = [(r[0], r[1]) for r in
+                arcpy.da.SearchCursor(offsets_fc, ["OFFSET", "SIDE"])]
+        self.assertTrue(rows)
+        for offset, side in rows:
+            expected = ("Centre" if abs(offset) < 1e-9
+                        else ("Left" if offset > 0 else "Right"))
+            self.assertEqual(side, expected, offset)
+        self.assertEqual({s for _, s in rows}, {"Left", "Centre", "Right"})
+        with open(pr["out_offset_lines"].symbology, encoding="utf-8") as fh:
+            renderer = json.load(fh)["layerDefinitions"][0]["renderer"]
+        self.assertEqual(renderer["fields"], ["SIDE"])
+        seen = {}
+        for cls in renderer["groups"][0]["classes"]:
+            rgb = cls["symbol"]["symbol"]["symbolLayers"][0]["color"]["values"][:3]
+            seen[cls["values"][0]["fieldValues"][0]] = "#%02X%02X%02X" % tuple(rgb)
+        self.assertEqual(seen["Left"], plotting.PALETTE["side_left"].upper())
+        self.assertEqual(seen["Right"], plotting.PALETTE["side_right"].upper())
+        self.assertEqual(seen["Centre"], plotting.PALETTE["centre"].upper())
         with open(pr["out_stations"].symbology, encoding="utf-8") as fh:
             self.assertIn('"charts"', fh.read())
 

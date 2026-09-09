@@ -58,6 +58,10 @@ class SwathConfig:
     thi_clip_range: bool = False
     min_valid: int = 1
     legacy_stats: bool = False
+    # How the individual profile lines are coloured in saved charts: single |
+    # side | ramp.  Carried into the bundle so the chart window opens showing
+    # what the run's exported figures show.
+    chart_profile_colour: str = "single"
 
     # transects generated from a trace (0 = not used)
     transect_spacing: float = 0.0
