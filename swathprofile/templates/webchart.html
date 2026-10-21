@@ -146,18 +146,6 @@ var SwathCore = (function () {
     return new Float64Array(bytesOf(b64).buffer);
   }
 
-  /** At most `cap` row indices spread evenly over [0, n), always including
-      the first, the last and `keep` (the centre line). */
-  function pickRows(n, cap, keep) {
-    var out = [], seen = {};
-    if (n <= cap) { for (var i = 0; i < n; i++) out.push(i); return out; }
-    function add(i) { if (i >= 0 && i < n && !seen[i]) { seen[i] = true; out.push(i); } }
-    for (var k = 0; k < cap; k++) add(Math.round(k * (n - 1) / (cap - 1)));
-    if (keep !== undefined && keep !== null) add(keep);
-    out.sort(function (a, b) { return a - b; });
-    return out;
-  }
-
   /** Indices that draw the same picture at pixel resolution: in every pixel
       column, the first, lowest, highest and last point of each gap-free run
       (the "M4" reduction).  -1 marks a gap (NoData). */
@@ -391,7 +379,7 @@ var SwathCore = (function () {
   }
 
   return {
-    decodeF32: decodeF32, decodeF64: decodeF64, pickRows: pickRows,
+    decodeF32: decodeF32, decodeF64: decodeF64,
     decimate: decimate, linePathIdx: linePathIdx, niceStep: niceStep, niceTicks: niceTicks,
     stepDecimals: stepDecimals, formatTick: formatTick, formatValue: formatValue,
     lowerBound: lowerBound, nearestIndex: nearestIndex, indexRange: indexRange,
@@ -411,7 +399,6 @@ if (typeof module !== "undefined" && module.exports) { module.exports = SwathCor
   var NS = "http://www.w3.org/2000/svg";       // the SVG namespace, not a download
   var FONT = "Segoe UI, Helvetica, Arial, sans-serif";
   var PX = 4 / 3;                              // matplotlib points -> CSS pixels
-  var MAX_ROWS = 101;                          // profile lines drawn at most
 
   var SERIES = [
     ["profiles", "Profile lines"], ["min", "Minimum"], ["max", "Maximum"],
@@ -498,8 +485,10 @@ if (typeof module !== "undefined" && module.exports) { module.exports = SwathCor
     p.x = new Float64Array(n);
     for (var i = 0; i < n; i++) p.x[i] = p.d[i] / p.scale.factor;
     p.centreRow = p.sides ? p.sides.indexOf(0) : -1;
-    p.rows = p.n_line_rows ? C.pickRows(p.n_line_rows, MAX_ROWS,
-                                        p.centreRow >= 0 ? p.centreRow : null) : [];
+    // Every profile line is drawn, always: the profile family is the point
+    // of the offset-lines method.
+    p.rows = [];
+    for (var row = 0; row < p.n_line_rows; row++) p.rows.push(row);
     p.decoded = true;
     return p;
   }
@@ -598,8 +587,10 @@ if (typeof module !== "undefined" && module.exports) { module.exports = SwathCor
 
   // -- drawing ------------------------------------------------------------------
 
-  // A line's path, thinned to pixel resolution when it has many more stations
-  // than the panel has pixels (the picture is the same, the drawing quicker).
+  // A line's path.  When a line has many more stations than the panel has
+  // pixels, only the points that can show are kept - in each pixel column the
+  // first, lowest, highest and last - so the picture is identical and the
+  // drawing quicker.  This never drops a line, only invisible points on one.
   function pathFor(xs, ys, base, i0, i1, sx, sy, widthPx) {
     if (i1 - i0 + 1 > 2 * widthPx) return C.linePathIdx(xs, ys, base, C.decimate(xs, ys, base, i0, i1, sx), sx, sy);
     return C.linePath(xs, ys, i0, i1, sx, sy, base);
@@ -1006,11 +997,6 @@ if (typeof module !== "undefined" && module.exports) { module.exports = SwathCor
     el("p", {}, box, bits.join(" | "));
     if (lines && S.show.profiles && S.colour !== "single") {
       el("p", {}, box, "Sides: " + p.side_labels[0] + ", " + p.side_labels[1]);
-    }
-    if (lines && S.show.profiles && p.rows.length < p.n_line_rows) {
-      el("p", {}, box, "Showing " + p.rows.length + " of " + p.n_line_rows +
-         " profile lines, evenly spaced, including the centre and both edges; the " +
-         "statistics and the cross-section use them all.");
     }
     var tail = "Run " + (D.title || "") + " · SwathProfile " + (D.tool_version || "");
     if (D.created) tail += " · created " + D.created;

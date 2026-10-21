@@ -168,14 +168,17 @@ the THi panel, a readout on hover, the cross‑section at a clicked station
 (arrow keys step along), drag‑to‑zoom, and PNG or SVG export with the title and
 the same provenance footer as the saved charts. It is a snapshot of one run,
 and each run opens in a new browser tab; the chart window remains the place to
-compare runs, smooth, measure, re‑zero, detrend and stack. A swath of more
-than 101 offset lines shows 101 of them, evenly spaced, though the statistics
-use them all.
+compare runs, smooth, measure, re‑zero, detrend and stack. Every profile line
+is drawn, however many there are; on lines with far more stations than the
+screen has pixels, only the points that can show are drawn, so the picture is
+unchanged.
 
-The page is typically a few megabytes. Very large runs, such as hundreds of
-transects on LiDAR, keep every statistic but leave out per‑line samples beyond
-a budget, which the page and the run both say; the run also reports the page's
-size and warns when it is too big for most email. Some email systems block or
+The page is typically a few megabytes, and the run reports its size and warns
+when it is too big for most email. It keeps every profile line of every
+profile unless that would make it larger than browsers open comfortably,
+about 150 MB, which takes something like hundreds of transects on LiDAR. Only
+then are lines left out, as few as possible, and the page and the run both
+say so; the statistics are always all there. Some email systems block or
 quarantine HTML attachments with scripts in them: zip the page, or share it
 through a folder.
 

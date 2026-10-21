@@ -51,19 +51,6 @@ test("float64 coordinates written by numpy decode exactly", () => {
   assert.equal(C.decodeF64(null), null);
 });
 
-test("at most `cap` rows, spread evenly, always with the edges and the centre", () => {
-  assert.deepEqual(arr(C.pickRows(5, 101, 2)), [0, 1, 2, 3, 4]);
-  const rows = arr(C.pickRows(1001, 101, 500));
-  assert.equal(rows.length, 101);
-  assert.equal(rows[0], 0);
-  assert.equal(rows[rows.length - 1], 1000);
-  assert.ok(rows.includes(500));
-  assert.deepEqual(rows, [...rows].sort((a, b) => a - b));
-  // A centre that is not on the even grid is added, not substituted.
-  const odd = arr(C.pickRows(1000, 101, 499));
-  assert.ok(odd.includes(499) && odd.length === 102);
-});
-
 test("decimation keeps each pixel column's first, lowest, highest and last point", () => {
   // Ten stations in one pixel column, then ten in the next.
   const xs = Array.from({ length: 20 }, (_, i) => i < 10 ? 0.1 * i : 1 + 0.1 * (i - 10));

@@ -199,7 +199,7 @@ def _result(method="offset", name="Across the scarp", **cfg):
 @unittest.skipIf(BROWSER is None, "no Chromium-based browser found")
 class RenderTest(unittest.TestCase):
 
-    def _drive(self, result, max_samples=webchart.MAX_SAMPLES):
+    def _drive(self, result, max_samples=None):
         page = webchart.render(webchart.build_payload(result, title="render",
                                                       max_samples=max_samples))
         page = page.replace("</body>", HARNESS + "</body>")
@@ -269,16 +269,16 @@ class RenderTest(unittest.TestCase):
         self.assertIn("Per-line samples left out of this page", out["notices"])
         self.assertGreater(out["zoom"]["before"], 0)          # the envelope is drawn
 
-    def test_a_very_wide_swath_draws_at_most_101_lines(self):
+    def test_every_profile_line_is_drawn_even_in_a_very_wide_swath(self):
         out = self._drive(_result(n_lines=1001, swath_width=1000.0))
         self.assertEqual(out["ready"], "1")
-        self.assertEqual(out["profilePaths"], 101)
-        self.assertIn("Showing 101 of 1001 profile lines", out["info"])
+        self.assertEqual(out["profilePaths"], 1001)
+        self.assertNotIn("Showing", out["info"])
         self.assertEqual(out["csp"], [])
 
     def test_the_size_note_is_shown_above_the_chart(self):
         out = self._drive(_result(), max_samples=10)
-        self.assertIn("manageable size", out["note"])
+        self.assertIn("too large for a browser to open", out["note"])
 
     def test_a_hostile_profile_name_stays_text(self):
         evil = '</script><img src=x onerror="alert(1)"><!--'

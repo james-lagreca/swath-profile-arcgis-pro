@@ -47,13 +47,13 @@
   cross-section at a clicked station, drag-to-zoom, and PNG/SVG export with
   the title and provenance footer drawn in. Its numbers, colours, side labels
   and footer come from the same code as the saved charts. A security policy in
-  the page forbids it any network access. Each profile is decoded only when it
-  is shown, at most 101 offset lines are drawn, and long profiles are thinned
-  to screen resolution without losing any extreme, so runs of hundreds of
-  transects stay quick. Per-line samples beyond a budget are left out (the
-  THi raster's are kept first), both the page and the run say so, the run
-  reports the page's size, and a page too large to open comfortably is not
-  written.
+  the page forbids it any network access. Every profile line is drawn; each
+  profile is decoded only when it is shown, and on lines with far more
+  stations than pixels only the points that can show are drawn, so runs of
+  hundreds of transects stay quick. Lines are left out only if the page with
+  all of them would be larger than browsers open comfortably (150 MB): then as
+  few as possible, the THi raster's kept first, and the page and the run say
+  so. The run reports the page's size.
 
 ### Fixed
 - **On computers whose security software allows only approved programs, the

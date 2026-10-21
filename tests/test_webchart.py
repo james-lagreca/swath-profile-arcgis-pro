@@ -3,7 +3,8 @@
 
 The page must carry exactly the run's numbers (checked by decoding its data
 block and comparing with the statistics), use the same side colours, labels
-and footer as the saved charts, stay a manageable size, work offline with no
+and footer as the saved charts, keep every profile line unless the page would
+be too large for a browser to open, work offline with no
 way to reach the network, hold no file paths, and not let any profile name
 break out of its data block.
 """
@@ -137,14 +138,38 @@ class PayloadTest(unittest.TestCase):
         self.assertIn(f"shown for {res.thi_raster} only", payload["lines_note"])
         self.assertIn("1 profile(s)", payload["lines_note"])
         self.assertIn("second", payload["lines_note"])
-        self.assertEqual(webchart.build_payload(res)["lines_note"], "")
+        self.assertIn("too large for a browser to open", payload["lines_note"])
+        # By default every line of every profile is kept, whatever the size.
+        full = webchart.build_payload(res)
+        self.assertEqual(full["lines_note"], "")
+        self.assertEqual(full["samples"]["rule"], "all")
+        self.assertEqual(full["samples"]["kept"], full["samples"]["total"])
 
         msg = CollectingMessenger()
         path = os.path.join(tempfile.mkdtemp(), "small.html")
         report = webchart.write_web_chart(path, res, max_samples=one + 1, messenger=msg)
         self.assertTrue(report["written"])
         self.assertEqual(report["left_out"], 1)
-        self.assertTrue(any("manageable size" in m for m in msg.infos))
+        self.assertTrue(any("too large for a browser" in m for m in msg.infos))
+
+    def test_lines_are_left_out_only_when_the_full_page_would_not_open(self):
+        res = _result([_line(1, name="first"), _line(2, x=LX - 800.0, name="second")])
+        folder = tempfile.mkdtemp()
+        full = webchart.write_web_chart(os.path.join(folder, "full.html"), res)
+        self.assertTrue(full["written"])
+        self.assertEqual(full["left_out"], 0)
+        bare = len(webchart.render(webchart.build_payload(res, max_samples=0)).encode())
+        # A limit with room for one and a half profiles' lines: the first
+        # profile's are kept, the second's are not, and the page says so.
+        limit = bare + 3 * (full["bytes"] - bare) // 4
+        msg = CollectingMessenger()
+        part = webchart.write_web_chart(os.path.join(folder, "part.html"), res,
+                                        page_limit=limit, messenger=msg)
+        self.assertTrue(part["written"])
+        self.assertLessEqual(part["bytes"], limit)
+        self.assertEqual(part["left_out"], 1)
+        self.assertIn("too large for a browser to open", part["note"])
+        self.assertTrue(any("left out" in m for m in msg.infos))
 
     def test_a_page_over_the_limit_is_not_written(self):
         path = os.path.join(tempfile.mkdtemp(), "huge.html")

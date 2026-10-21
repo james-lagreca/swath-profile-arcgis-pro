@@ -16,12 +16,14 @@ are coordinates, float32 for elevations and statistics.  Side colours, side
 labels and the footer are computed here by the same functions the saved charts
 use, so the page cannot disagree with them.
 
-Size.  The per-line samples (they draw the individual profile lines and the
-cross-sections) are capped at :data:`MAX_SAMPLES`: if every raster's fit they
-are all kept, otherwise only the THi raster's are, profile by profile in
-order until the budget is used.  Statistics are always kept.  A page over
-:data:`PAGE_LIMIT` is not written at all, and pages over :data:`EMAIL_HINT`
-are reported as too big for most email.
+Size.  Every profile line of every profile is kept: the per-line samples are
+what draw the individual profile lines and the cross-sections, and the profile
+family is the point of the offset-lines method.  Only if that page would be
+larger than :data:`PAGE_LIMIT` - more than browsers open comfortably - are
+lines left out, as few as possible: the THi raster's are kept first, profile
+by profile in order, and both the page and the run say so.  Statistics are
+always kept.  Pages over :data:`EMAIL_HINT` are reported as too big for most
+email.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ import numpy as np
 
 from . import __version__
 
-__all__ = ["MAX_SAMPLES", "EMAIL_HINT", "PAGE_LIMIT", "SCHEMA", "TEMPLATE",
+__all__ = ["EMAIL_HINT", "PAGE_LIMIT", "SCHEMA", "TEMPLATE",
            "build_payload", "render", "write_web_chart", "extract_payload", "decode"]
 
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates",
@@ -46,8 +48,6 @@ _DATA_SLOT = "/*__SWATH_DATA__*/"
 _TITLE_SLOT = "__SWATH_TITLE__"
 SCHEMA = 2
 
-#: Per-line samples kept in one page: 16 MB of float32, about 21 MB of text.
-MAX_SAMPLES = 4_000_000
 #: Above this many bytes a page is too big for most email.
 EMAIL_HINT = 20_000_000
 #: A page larger than this is not written: browsers open it slowly or not at all.
@@ -90,14 +90,17 @@ def _hexes(colours):
 
 
 def _lines_kept(result, budget):
-    """Which (part, raster) per-line samples go in the page, and the rule used."""
+    """Which (part, raster) per-line samples go in the page, and the rule used.
+
+    *budget* None keeps every one.
+    """
     sizes = {}
     for oid, part_id in result.parts():
         for rname, s in result.for_part(oid, part_id).items():
             if s.values is not None:
                 sizes[(oid, part_id, rname)] = int(s.values.size)
     total = sum(sizes.values())
-    if total <= budget:
+    if budget is None or total <= budget:
         return set(sizes), "all", total, total
     keep, used = set(), 0
     for oid, part_id in result.parts():
@@ -110,15 +113,19 @@ def _lines_kept(result, budget):
     return keep, "thi", total, used
 
 
-def build_payload(result, title: str = "", max_samples: int = MAX_SAMPLES,
-                  created=None) -> dict:
-    """Everything the page draws, as a JSON-ready dict (see the module notes)."""
+def build_payload(result, title: str = "", max_samples=None, created=None) -> dict:
+    """Everything the page draws, as a JSON-ready dict (see the module notes).
+
+    *max_samples* None keeps every profile line; a number caps the per-line
+    samples (used only to fit a page under :data:`PAGE_LIMIT`).
+    """
     from .geometry import side_of
     from .plotting import PALETTE, chart_footer, profile_colours, side_labels
 
     cfg = result.config
     cfg_dict = json.loads(cfg.to_json()) if cfg is not None else {}
-    keep, rule, total, kept = _lines_kept(result, int(max_samples))
+    keep, rule, total, kept = _lines_kept(
+        result, None if max_samples is None else int(max_samples))
     left_out, parts = [], []
     for oid, part_id in result.parts():
         g = result.geometry.get((oid, part_id), {})
@@ -162,14 +169,17 @@ def build_payload(result, title: str = "", max_samples: int = MAX_SAMPLES,
         parts.append(part)
 
     notes = []
+    too_big = ("because with every one the page would be too large for a browser "
+               "to open")
     if rule == "thi" and len(result.raster_names) > 1:
-        notes.append(f"To keep this page a manageable size, profile lines and "
-                     f"cross-sections are shown for {result.thi_raster} only.")
+        notes.append(f"Profile lines and cross-sections are shown for "
+                     f"{result.thi_raster} only, {too_big}.")
     if left_out:
         shown = ", ".join(left_out[:8]) + (", ..." if len(left_out) > 8 else "")
         notes.append(f"Profile lines and cross-sections are left out for "
-                     f"{len(left_out)} profile(s) to keep this page a manageable size: "
-                     f"{shown}. Their envelopes and statistics are all here.")
+                     f"{len(left_out)} profile(s), {too_big}: {shown}. Their envelopes "
+                     "and statistics are all here, and the chart window and saved "
+                     "charts show every line.")
     pct = (cfg.pct_low, cfg.pct_high) if cfg is not None else (5.0, 95.0)
     return {
         "schema": SCHEMA,
@@ -184,8 +194,8 @@ def build_payload(result, title: str = "", max_samples: int = MAX_SAMPLES,
         "elapsed": _finite(result.elapsed),
         "config": cfg_dict,
         "palette": dict(PALETTE),
-        "samples": {"budget": int(max_samples), "total": total, "kept": kept,
-                    "rule": rule},
+        "samples": {"budget": None if max_samples is None else int(max_samples),
+                    "total": total, "kept": kept, "rule": rule},
         "lines_note": " ".join(notes),
         "parts": parts,
     }
@@ -220,15 +230,35 @@ def extract_payload(page: str) -> dict:
     return json.loads(m.group(1))
 
 
-def write_web_chart(path, result, title: str = "", max_samples: int = MAX_SAMPLES,
+def write_web_chart(path, result, title: str = "", max_samples=None,
                     page_limit: int = PAGE_LIMIT, messenger=None) -> dict:
     """Write the browser chart for *result* to *path* (atomically).
 
-    Returns ``{"path", "bytes", "written", "left_out", "note"}``.  A page over
-    *page_limit* bytes is not written (``written`` False, ``path`` None).
+    Every profile line is kept unless that page would be larger than
+    *page_limit* bytes; then as many as fit are kept (see the module notes).
+    Returns ``{"path", "bytes", "written", "left_out", "note"}``; a page that
+    would be over the limit even without any lines is not written (``written``
+    False, ``path`` None).
     """
     payload = build_payload(result, title=title, max_samples=max_samples)
     page = render(payload).encode("utf-8")
+    if len(page) > page_limit and payload["samples"]["kept"] > 0:
+        # Too big with every line.  The cost of a sample is measured, not
+        # assumed: the page with every line against the page with none, which
+        # also counts each profile's offsets, sides and colours.
+        created = payload["created"]
+        total = payload["samples"]["kept"]
+        bare = len(render(build_payload(result, title=title, max_samples=0,
+                                        created=created)).encode("utf-8"))
+        per_sample = max((len(page) - bare) / total, 1e-9)
+        budget = max(0, int((page_limit - bare) / per_sample * 0.99))
+        for _ in range(5):
+            payload = build_payload(result, title=title, max_samples=budget,
+                                    created=created)
+            page = render(payload).encode("utf-8")
+            if len(page) <= page_limit or budget == 0:
+                break
+            budget = int(budget * 0.9)
     left_out = sum(1 for p in payload["parts"] if p["lines"] == "omitted")
     report = {"path": None, "bytes": len(page), "written": False,
               "left_out": left_out, "note": payload["lines_note"]}
