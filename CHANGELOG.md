@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-10-21
 
 ### Added
 - **Colour the profile lines by which side of the baseline they came from.**

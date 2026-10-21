@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use this tool, please cite it and the method paper it implements."
 title: "Swath Profile for ArcGIS Pro"
-version: 1.0.0
-date-released: 2026-09-02
+version: 1.1.0
+date-released: 2026-10-21
 type: software
 license: GPL-3.0
 repository-code: "https://github.com/james-lagreca/swath-profile-arcgis-pro"

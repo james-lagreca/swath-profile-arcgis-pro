@@ -291,7 +291,7 @@ never collide with a layer's OIDs.
 "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe" -m pytest tests -q
 ```
 
-165 tests. Most assert against closed‑form answers on analytic surfaces — a
+207 tests, plus 10 for the browser chart's JavaScript. Most assert against closed‑form answers on analytic surfaces — a
 plane cross‑section has HI exactly 0.5 and THi exactly 50, bilinear
 interpolation is exact on a plane, detrending a plane profile gives exactly
 zero, transects on a circular trace are exactly radial — so a failure localises
