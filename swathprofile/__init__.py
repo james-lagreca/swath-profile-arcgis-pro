@@ -10,7 +10,8 @@ everything else is testable with plain numpy.
 
 arcpy-free
     :mod:`geometry`, :mod:`sampling`, :mod:`stats`, :mod:`smoothing`,
-    :mod:`plotting`, :mod:`bundle`, :mod:`errors`, :mod:`mask`, :mod:`transforms`
+    :mod:`plotting`, :mod:`bundle`, :mod:`errors`, :mod:`mask`, :mod:`transforms`,
+    :mod:`webchart`, :mod:`chartwindow`
 arcpy-dependent
     :mod:`raster_io`, :mod:`features`, :mod:`zonal`, :mod:`outputs`, :mod:`engine`
     (arcpy is imported inside their functions, so the engine also runs on an

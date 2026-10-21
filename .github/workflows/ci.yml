@@ -1,9 +1,10 @@
 name: tests
 
-# The numerical core, transforms, ridgeline figure and chart JSON need no
-# ArcGIS; they run here on every push.  The arcpy-dependent tests (raster
-# reading, writers, the tool itself) run locally with the ArcGIS Pro
-# interpreter - see README "Tests".
+# The numerical core, transforms, ridgeline figure, chart JSON, sampling mask,
+# the engine on an in-memory raster and the browser chart need no ArcGIS; they
+# run here on every push.  The arcpy-dependent tests (raster reading, writers,
+# the tool itself) run locally with the ArcGIS Pro interpreter - see README
+# "Tests".
 on:
   push:
   pull_request:
@@ -21,4 +22,11 @@ jobs:
       - name: Run arcpy-free tests
         env:
           MPLBACKEND: Agg
-        run: python -m pytest tests/test_core.py tests/test_transforms.py tests/test_mask.py -q
+        # test_webchart_render.py drives the browser chart in the runner's
+        # preinstalled Google Chrome; it skips itself if no browser is found.
+        run: >-
+          python -m pytest -q tests/test_core.py tests/test_transforms.py
+          tests/test_mask.py tests/test_chartwindow.py tests/test_webchart.py
+          tests/test_webchart_render.py
+      - name: Run the browser chart's JavaScript tests
+        run: node --test tests/js/webchart_core.test.js

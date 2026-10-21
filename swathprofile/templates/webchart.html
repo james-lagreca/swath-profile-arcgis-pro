@@ -1,0 +1,1143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'">
+<title>__SWATH_TITLE__</title>
+<!--
+  Swath Profile for ArcGIS Pro - browser chart.
+
+  One self-contained page: no libraries, no network, nothing to install or
+  approve.  It needs only a web browser, so it works on computers where the
+  separate chart window cannot run, and it can be sent to colleagues who do
+  not have ArcGIS.  Written by swathprofile/webchart.py, which fills in the
+  data block below; the JavaScript reads it and draws everything as SVG.  The
+  security policy above forbids the page any network access at all.
+-->
+<style>
+  :root {
+    --ink: #222; --muted: #6b6b6b; --line: #d9d9de; --panel: #f6f6f8;
+    --accent: #01008a; --error: #a4161a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 13px/1.4 "Segoe UI", Helvetica, Arial, sans-serif; color: var(--ink);
+         background: #fff; }
+  #app { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+  #side { background: var(--panel); border-right: 1px solid var(--line);
+          padding: 12px 12px 16px; overflow-y: auto; max-height: 100vh;
+          position: sticky; top: 0; }
+  #side h1 { font-size: 14px; margin: 0 0 2px; word-break: break-word; }
+  #side .sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  #side h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+  #parts { max-height: 38vh; overflow-y: auto; border: 1px solid var(--line);
+           background: #fff; border-radius: 4px; }
+  #parts button { display: block; width: 100%; text-align: left; border: 0;
+                  border-bottom: 1px solid #eee; background: none; padding: 5px 8px;
+                  font: inherit; cursor: pointer; color: inherit; }
+  #parts button:last-child { border-bottom: 0; }
+  #parts button:hover { background: #eef0fb; }
+  #parts button[aria-selected="true"] { background: #dfe3fa; font-weight: 600; }
+  #parts button.empty { color: var(--muted); }
+  #parts .meta { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+  label.row { display: flex; align-items: center; gap: 6px; margin: 2px 0; cursor: pointer; }
+  label.row.disabled { color: var(--muted); cursor: default; }
+  .indent { margin: 2px 0 4px 22px; display: flex; align-items: center; gap: 6px; }
+  select { font: inherit; padding: 1px 2px; max-width: 100%; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+  .buttons button { font: inherit; padding: 4px 10px; border: 1px solid #b9b9c3;
+                    border-radius: 4px; background: #fff; cursor: pointer; }
+  .buttons button:hover { background: #eef0fb; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 14px; }
+  #main { padding: 10px 14px 14px; min-width: 0; }
+  #chart-wrap { position: relative; width: 100%; }
+  #chart { display: block; user-select: none; }
+  #tip { position: absolute; pointer-events: none; background: rgba(255,255,255,.96);
+         border: 1px solid #c8c8d0; border-radius: 4px; padding: 6px 8px;
+         font-size: 12px; box-shadow: 0 2px 6px rgba(0,0,0,.12); white-space: nowrap; }
+  #tip table { border-collapse: collapse; }
+  #tip td { padding: 0 6px 0 0; }
+  #tip td.v { text-align: right; font-variant-numeric: tabular-nums; }
+  #tip .sw { display: inline-block; width: 10px; height: 3px; margin-right: 4px;
+             vertical-align: middle; }
+  #info { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  #info b { color: var(--ink); }
+  #info p { margin: 2px 0; }
+  #note { background: #fff8e1; border: 1px solid #f1dfa6; color: #5b4a12;
+          padding: 6px 10px; border-radius: 4px; margin: 0 0 8px; }
+  #error { background: #fdecec; border: 1px solid #f3b7b7; color: var(--error);
+           padding: 8px 10px; border-radius: 4px; margin-bottom: 8px; }
+  .noscript { margin: 2em; font-size: 15px; }
+  @media (max-width: 760px) {
+    #app { grid-template-columns: 1fr; }
+    #side { position: static; max-height: none; border-right: 0;
+            border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<noscript><p class="noscript">This chart needs JavaScript. Open the file in Edge,
+Chrome, Firefox or Safari.</p></noscript>
+<div id="app">
+  <aside id="side">
+    <h1 id="run-title">Swath profile</h1>
+    <p class="sub" id="run-sub"></p>
+    <h2>Profiles</h2>
+    <div id="parts" role="listbox" aria-label="Profiles"></div>
+    <div id="raster-box" hidden>
+      <h2>Raster</h2>
+      <select id="raster" aria-label="Raster"></select>
+    </div>
+    <h2>Series</h2>
+    <div id="series"></div>
+    <h2>Panels</h2>
+    <label class="row"><input type="checkbox" id="show-thi" checked> THi panel</label>
+    <label class="row"><input type="checkbox" id="show-xs" checked> Cross-section panel</label>
+    <h2>Chart</h2>
+    <div class="buttons">
+      <button type="button" id="reset">Reset zoom</button>
+      <button type="button" id="save-png">Save PNG</button>
+      <button type="button" id="save-svg">Save SVG</button>
+    </div>
+    <p class="hint">Drag across the chart to zoom, double-click to zoom out. Click to
+      pin a station and see its cross-section; the left and right arrow keys move it,
+      up and down change profile.</p>
+  </aside>
+  <main id="main">
+    <div id="error" hidden></div>
+    <p id="note" hidden></p>
+    <div id="chart-wrap">
+      <svg id="chart" role="img" aria-label="Swath profile chart"></svg>
+      <div id="tip" hidden></div>
+    </div>
+    <div id="info"></div>
+  </main>
+</div>
+
+<script type="application/json" id="swath-data">/*__SWATH_DATA__*/</script>
+
+<script>
+/* SWATH-CORE-START
+   Pure functions: no DOM.  tests/js/webchart_core.test.js runs this block in
+   Node, so everything that can be checked without a browser lives here. */
+var SwathCore = (function () {
+  "use strict";
+
+  function bytesOf(b64) {
+    var bin = atob(b64);
+    var n = bin.length;
+    var bytes = new Uint8Array(n);
+    for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  /** Base64 of little-endian float32 -> Float32Array (NaN kept), or null. */
+  function decodeF32(b64) {
+    if (b64 === null || b64 === undefined) return null;
+    return new Float32Array(bytesOf(b64).buffer);
+  }
+
+  /** Base64 of little-endian float64 -> Float64Array, or null (coordinates). */
+  function decodeF64(b64) {
+    if (b64 === null || b64 === undefined) return null;
+    return new Float64Array(bytesOf(b64).buffer);
+  }
+
+  /** At most `cap` row indices spread evenly over [0, n), always including
+      the first, the last and `keep` (the centre line). */
+  function pickRows(n, cap, keep) {
+    var out = [], seen = {};
+    if (n <= cap) { for (var i = 0; i < n; i++) out.push(i); return out; }
+    function add(i) { if (i >= 0 && i < n && !seen[i]) { seen[i] = true; out.push(i); } }
+    for (var k = 0; k < cap; k++) add(Math.round(k * (n - 1) / (cap - 1)));
+    if (keep !== undefined && keep !== null) add(keep);
+    out.sort(function (a, b) { return a - b; });
+    return out;
+  }
+
+  /** Indices that draw the same picture at pixel resolution: in every pixel
+      column, the first, lowest, highest and last point of each gap-free run
+      (the "M4" reduction).  -1 marks a gap (NoData). */
+  function decimate(xs, ys, base, i0, i1, sx) {
+    base = base || 0;
+    var out = [], col = null, first = -1, lo = -1, hi = -1, last = -1;
+    function flush() {
+      if (first < 0) return;
+      var pts = [first, lo, hi, last].sort(function (a, b) { return a - b; });
+      for (var k = 0; k < 4; k++) if (k === 0 || pts[k] !== pts[k - 1]) out.push(pts[k]);
+      first = lo = hi = last = -1;
+    }
+    for (var i = i0; i <= i1; i++) {
+      var y = ys[base + i];
+      if (!isFinite(y)) {
+        flush();
+        col = null;
+        if (out.length && out[out.length - 1] !== -1) out.push(-1);
+        continue;
+      }
+      var c = Math.floor(sx(xs[i]));
+      if (c !== col) { flush(); col = c; }
+      if (first < 0) { first = lo = hi = last = i; }
+      else {
+        if (y < ys[base + lo]) lo = i;
+        if (y > ys[base + hi]) hi = i;
+        last = i;
+      }
+    }
+    flush();
+    return out;
+  }
+
+  /** SVG path data over an index list from decimate (-1 lifts the pen). */
+  function linePathIdx(xs, ys, base, idx, sx, sy) {
+    base = base || 0;
+    var parts = [], pen = false;
+    for (var k = 0; k < idx.length; k++) {
+      var i = idx[k];
+      if (i < 0) { pen = false; continue; }
+      parts.push((pen ? "L" : "M") + sx(xs[i]).toFixed(1) + " " + sy(ys[base + i]).toFixed(1));
+      pen = true;
+    }
+    return parts.join("");
+  }
+
+  function isNum(v) { return typeof v === "number" && isFinite(v); }
+
+  /** A step of 1, 2 or 5 x 10^k giving about `target` intervals over `span`. */
+  function niceStep(span, target) {
+    if (!(span > 0) || !isFinite(span)) return 1;
+    var raw = span / Math.max(target || 5, 1);
+    var mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    var f = raw / mag;
+    var nice = f <= 1 ? 1 : (f <= 2 ? 2 : (f <= 5 ? 5 : 10));
+    return nice * mag;
+  }
+
+  /** Round-number ticks inside [lo, hi]. */
+  function niceTicks(lo, hi, target) {
+    if (!isNum(lo) || !isNum(hi)) return [];
+    if (hi < lo) { var t = lo; lo = hi; hi = t; }
+    if (hi === lo) return [lo];
+    var step = niceStep(hi - lo, target);
+    var first = Math.ceil(lo / step - 1e-9);
+    var out = [];
+    for (var k = first; k * step <= hi + step * 1e-9 && out.length < 1000; k++) {
+      var v = +(k * step).toPrecision(12);
+      out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+    }
+    return out;
+  }
+
+  /** Decimal places that show every multiple of `step` exactly. */
+  function stepDecimals(step) {
+    if (!(step > 0) || !isFinite(step)) return 0;
+    for (var k = 0; k < 12; k++) {
+      var s = step * Math.pow(10, k);
+      if (Math.abs(s - Math.round(s)) < 1e-6 * Math.max(1, s)) return k;
+    }
+    return 12;
+  }
+
+  function formatTick(v, step) {
+    if (Math.abs(v) < 1e-12) v = 0;
+    return v.toFixed(stepDecimals(step));
+  }
+
+  /** Readout value: about four significant figures, "-" for NoData. */
+  function formatValue(v, digits) {
+    if (!isNum(v)) return "-";
+    if (digits === undefined) {
+      var a = Math.abs(v);
+      digits = a >= 1000 ? 1 : (a >= 100 ? 2 : (a >= 1 ? 3 : 4));
+    }
+    return v.toFixed(digits);
+  }
+
+  /** First index whose value is >= x, in an ascending array. */
+  function lowerBound(xs, x) {
+    var lo = 0, hi = xs.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (xs[mid] < x) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  /** Nearest index to x in an ascending array (ties go to the lower index). */
+  function nearestIndex(xs, x) {
+    var n = xs.length;
+    if (n === 0) return -1;
+    if (!(x > xs[0])) return 0;
+    if (!(x < xs[n - 1])) return n - 1;
+    var hi = lowerBound(xs, x), lo = hi - 1;
+    return (x - xs[lo] <= xs[hi] - x) ? lo : hi;
+  }
+
+  /** Inclusive index range covering [x0, x1], one wider on each side so a
+      line reaches the frame, clamped to the array. */
+  function indexRange(xs, x0, x1) {
+    var n = xs.length;
+    if (n === 0) return [0, -1];
+    var a = lowerBound(xs, x0) - 1, b = lowerBound(xs, x1);
+    return [Math.max(0, a), Math.min(n - 1, b)];
+  }
+
+  /** Runs [start, end) over which every array is finite. */
+  function finiteRuns(arrays, i0, i1) {
+    var runs = [], start = -1;
+    for (var i = i0; i <= i1; i++) {
+      var ok = true;
+      for (var a = 0; a < arrays.length; a++) {
+        if (!isFinite(arrays[a][i])) { ok = false; break; }
+      }
+      if (ok) { if (start < 0) start = i; }
+      else if (start >= 0) { runs.push([start, i]); start = -1; }
+    }
+    if (start >= 0) runs.push([start, i1 + 1]);
+    return runs;
+  }
+
+  /** SVG path data for a line, lifting the pen at every NoData value.
+      `base` offsets into a row-major sample matrix. */
+  function linePath(xs, ys, i0, i1, sx, sy, base) {
+    base = base || 0;
+    var parts = [], pen = false;
+    for (var i = i0; i <= i1; i++) {
+      var y = ys[base + i];
+      if (isFinite(y)) {
+        parts.push((pen ? "L" : "M") + sx(xs[i]).toFixed(1) + " " + sy(y).toFixed(1));
+        pen = true;
+      } else {
+        pen = false;
+      }
+    }
+    return parts.join("");
+  }
+
+  /** SVG path data filling between `lo` and `hi`, one polygon per gap-free run. */
+  function bandPath(xs, lo, hi, i0, i1, sx, sy) {
+    var runs = finiteRuns([lo, hi], i0, i1), out = [];
+    for (var k = 0; k < runs.length; k++) {
+      var a = runs[k][0], b = runs[k][1];
+      if (b - a < 2) continue;
+      var s = [];
+      for (var i = a; i < b; i++) {
+        s.push((i === a ? "M" : "L") + sx(xs[i]).toFixed(1) + " " + sy(hi[i]).toFixed(1));
+      }
+      for (var j = b - 1; j >= a; j--) {
+        s.push("L" + sx(xs[j]).toFixed(1) + " " + sy(lo[j]).toFixed(1));
+      }
+      out.push(s.join("") + "Z");
+    }
+    return out.join("");
+  }
+
+  /** [min, max] of the finite values of several arrays over [i0, i1]. */
+  function extent(arrays, i0, i1) {
+    var lo = Infinity, hi = -Infinity;
+    for (var a = 0; a < arrays.length; a++) {
+      var arr = arrays[a];
+      if (!arr) continue;
+      for (var i = i0; i <= i1; i++) {
+        var v = arr[i];
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    return [lo, hi];
+  }
+
+  /** [min, max] over stations [i0, i1] of a row-major (rows x stride) matrix. */
+  function matrixExtent(values, rows, stride, i0, i1) {
+    var lo = Infinity, hi = -Infinity;
+    if (!values) return [lo, hi];
+    for (var r = 0; r < rows; r++) {
+      var base = r * stride;
+      for (var i = i0; i <= i1; i++) {
+        var v = values[base + i];
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    return [lo, hi];
+  }
+
+  /** The samples across the band at station j, sorted by signed offset. */
+  function crossSection(values, offsets, nStations, j, sides) {
+    var pts = [];
+    for (var r = 0; r < offsets.length; r++) {
+      pts.push({ offset: offsets[r], z: values[r * nStations + j],
+                 side: sides ? sides[r] : 0, row: r });
+    }
+    pts.sort(function (a, b) { return a.offset - b.offset; });
+    return pts;
+  }
+
+  /** Kilometres once the line is longer than 5000 units, as the saved charts do. */
+  function distanceScale(span) {
+    return span > 5000 ? { factor: 1000, label: "Distance along baseline (km)", unit: "km" }
+                       : { factor: 1, label: "Distance along baseline (map units)", unit: "" };
+  }
+
+  /** [lo, hi] widened by `frac` of the span (or a little, if it is zero). */
+  function padRange(lo, hi, frac) {
+    if (!isNum(lo) || !isNum(hi)) return [0, 1];
+    if (hi === lo) { var p = Math.abs(lo) * 0.01 || 1; return [lo - p, hi + p]; }
+    var pad = (hi - lo) * (frac === undefined ? 0.04 : frac);
+    return [lo - pad, hi + pad];
+  }
+
+  return {
+    decodeF32: decodeF32, decodeF64: decodeF64, pickRows: pickRows,
+    decimate: decimate, linePathIdx: linePathIdx, niceStep: niceStep, niceTicks: niceTicks,
+    stepDecimals: stepDecimals, formatTick: formatTick, formatValue: formatValue,
+    lowerBound: lowerBound, nearestIndex: nearestIndex, indexRange: indexRange,
+    finiteRuns: finiteRuns, linePath: linePath, bandPath: bandPath,
+    extent: extent, matrixExtent: matrixExtent, crossSection: crossSection,
+    distanceScale: distanceScale, padRange: padRange
+  };
+})();
+if (typeof module !== "undefined" && module.exports) { module.exports = SwathCore; }
+/* SWATH-CORE-END */
+</script>
+
+<script>
+(function () {
+  "use strict";
+  var C = SwathCore;
+  var NS = "http://www.w3.org/2000/svg";       // the SVG namespace, not a download
+  var FONT = "Segoe UI, Helvetica, Arial, sans-serif";
+  var PX = 4 / 3;                              // matplotlib points -> CSS pixels
+  var MAX_ROWS = 101;                          // profile lines drawn at most
+
+  var SERIES = [
+    ["profiles", "Profile lines"], ["min", "Minimum"], ["max", "Maximum"],
+    ["pband", "Percentile band"], ["q1", "Q1"], ["q3", "Q3"],
+    ["mean", "Mean"], ["median", "Median"], ["centre", "Baseline profile"]
+  ];
+  var DEFAULT_SHOW = { profiles: true, min: true, max: true, pband: false, q1: true,
+                       q3: true, mean: true, median: false, centre: true };
+  var COLOUR_MODES = [["single", "Single colour"], ["side", "Side of line"],
+                      ["ramp", "Side + distance"]];
+  // Line series in drawing order, styled like the matplotlib charts.
+  var LINES = [
+    ["min", "z_min", "min", 1.0, null, "Min"],
+    ["max", "z_max", "max", 1.0, null, "Max"],
+    ["q1", "z_q1", "quartile", 0.9, null, "Q1"],
+    ["q3", "z_q3", "quartile", 0.9, [4, 2], "Q3"],
+    ["median", "z_median", "median", 1.0, [2, 2], "Median"],
+    ["mean", "z_mean", "mean", 1.4, null, "Mean"],
+    ["centre", "z_centre", "centre", 1.1, null, "Baseline"]
+  ];
+  var ARRAYS = ["z_min", "z_max", "z_mean", "z_median", "z_q1", "z_q3", "z_plo",
+                "z_phi", "z_centre", "thi", "n_valid"];
+
+  var D = null, PAL = null;
+  var S = { part: 0, rasterName: null, show: Object.assign({}, DEFAULT_SHOW),
+            colour: "single", thi: true, xs: true, domain: null, pinned: null };
+  var G = null;            // geometry of the last draw, for the mouse handlers
+  var drag = null;
+
+  function $(id) { return document.getElementById(id); }
+
+  function svg(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (attrs[k] !== undefined && attrs[k] !== null) e.setAttribute(k, attrs[k]);
+      }
+    }
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  function text(parent, x, y, s, attrs) {
+    var t = svg("text", Object.assign({ x: x, y: y, "font-size": 11, fill: "#444",
+                                        "font-family": FONT }, attrs || {}), parent);
+    t.textContent = s;
+    return t;
+  }
+
+  function el(tag, attrs, parent, content) {
+    var e = document.createElement(tag);
+    if (attrs) { for (var k in attrs) e.setAttribute(k, attrs[k]); }
+    if (content !== undefined) e.textContent = content;
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  function dash(pattern, width) {
+    if (!pattern) return null;
+    return pattern.map(function (v) { return (v * width * PX).toFixed(2); }).join(" ");
+  }
+
+  // -- data -----------------------------------------------------------------
+  // Each profile is decoded the first time it is shown, so a run of hundreds
+  // of transects opens at once and only uses memory for what is looked at.
+
+  function ensure(p) {
+    if (p.decoded) return p;
+    p.d = C.decodeF64(p.distances);
+    p.off = C.decodeF64(p.offsets);
+    p.distances = p.offsets = null;
+    p.rasters.forEach(function (r) {
+      ARRAYS.forEach(function (k) { r[k] = C.decodeF32(r[k]); });
+      r.vals = C.decodeF32(r.values);
+      r.values = null;
+      r.relief = null;
+      if (r.z_max && r.z_min) {
+        r.relief = new Float32Array(r.z_max.length);
+        for (var i = 0; i < r.relief.length; i++) r.relief[i] = r.z_max[i] - r.z_min[i];
+      }
+    });
+    var n = p.d.length;
+    p.scale = C.distanceScale(n ? p.d[n - 1] - p.d[0] : 0);
+    p.x = new Float64Array(n);
+    for (var i = 0; i < n; i++) p.x[i] = p.d[i] / p.scale.factor;
+    p.centreRow = p.sides ? p.sides.indexOf(0) : -1;
+    p.rows = p.n_line_rows ? C.pickRows(p.n_line_rows, MAX_ROWS,
+                                        p.centreRow >= 0 ? p.centreRow : null) : [];
+    p.decoded = true;
+    return p;
+  }
+
+  function part() { return ensure(D.parts[S.part]); }
+
+  function rasterNamed(p, name) {
+    for (var i = 0; i < p.rasters.length; i++) if (p.rasters[i].name === name) return p.rasters[i];
+    return null;
+  }
+  function raster() { var p = part(); return rasterNamed(p, S.rasterName) || p.rasters[0]; }
+  // THi is shown for the run's THi raster, as in the saved charts.
+  function thiRaster() { var p = part(); return rasterNamed(p, D.thi_raster) || raster(); }
+  function hasLines(p, r) { return p.lines === "included" && r.vals !== null; }
+
+  // -- controls ---------------------------------------------------------------
+
+  function buildControls() {
+    $("run-title").textContent = D.title || "Swath profile";
+    $("run-sub").textContent = D.parts.length + " profile" + (D.parts.length === 1 ? "" : "s") +
+      (D.created ? " · " + D.created : "");
+    if (D.lines_note) { $("note").hidden = false; $("note").textContent = D.lines_note; }
+
+    var list = $("parts");
+    D.parts.forEach(function (p, i) {
+      var b = el("button", { type: "button", role: "option", "data-index": i }, list);
+      el("span", {}, b, p.name);
+      var bits = [];
+      bits.push(p.method === "zonal" ? "all cells" : (p.n_lines + " lines"));
+      bits.push(p.n_stations + " stations");
+      if (p.mask_kept !== null) bits.push("mask kept " + Math.round(p.mask_kept) + "%");
+      if (!p.has_data) bits.push("no data");
+      el("span", { "class": "meta" }, b, bits.join(" · "));
+      if (!p.has_data) b.classList.add("empty");
+      b.addEventListener("click", function () { selectPart(i); });
+    });
+
+    var names = D.raster_names.length ? D.raster_names
+                                      : D.parts[0].rasters.map(function (r) { return r.name; });
+    S.rasterName = names[0];
+    if (names.length > 1) {
+      $("raster-box").hidden = false;
+      names.forEach(function (n) { el("option", { value: n }, $("raster"), n); });
+      $("raster").addEventListener("change", function () { S.rasterName = this.value; draw(); });
+    }
+
+    var box = $("series");
+    SERIES.forEach(function (s) {
+      var lab = el("label", { "class": "row", "data-series": s[0] }, box);
+      var cb = el("input", { type: "checkbox", id: "show-" + s[0] }, lab);
+      cb.checked = !!S.show[s[0]];
+      lab.appendChild(document.createTextNode(" " + s[1]));
+      cb.addEventListener("change", function () { S.show[s[0]] = this.checked; draw(); });
+      if (s[0] === "profiles") {
+        var row = el("div", { "class": "indent" }, box);
+        el("span", {}, row, "Colour by");
+        var sel = el("select", { id: "colour-mode", "aria-label": "Colour profile lines by" }, row);
+        COLOUR_MODES.forEach(function (m) { el("option", { value: m[0] }, sel, m[1]); });
+        sel.value = S.colour;
+        sel.addEventListener("change", function () { S.colour = this.value; draw(); });
+      }
+    });
+
+    $("show-thi").addEventListener("change", function () { S.thi = this.checked; draw(); });
+    $("show-xs").addEventListener("change", function () { S.xs = this.checked; draw(); });
+    $("reset").addEventListener("click", function () { S.domain = null; draw(); });
+    $("save-svg").addEventListener("click", saveSvg);
+    $("save-png").addEventListener("click", savePng);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", debounce(draw, 120));
+  }
+
+  function selectPart(i) {
+    S.part = Math.max(0, Math.min(D.parts.length - 1, i));
+    S.domain = null;
+    S.pinned = null;
+    var buttons = $("parts").querySelectorAll("button");
+    for (var k = 0; k < buttons.length; k++) {
+      buttons[k].setAttribute("aria-selected", k === S.part ? "true" : "false");
+    }
+    if (buttons[S.part]) buttons[S.part].scrollIntoView({ block: "nearest" });
+    draw();
+  }
+
+  function syncControls(p, r) {
+    var lines = hasLines(p, r);
+    var cb = $("show-profiles"), sel = $("colour-mode");
+    var lab = cb.parentNode;
+    cb.disabled = !lines;
+    sel.disabled = !lines;
+    lab.classList.toggle("disabled", !lines);
+    lab.title = lines ? "" : (p.lines === "none"
+      ? "All-cells sampling keeps no per-line samples."
+      : "Per-line samples were left out of this page to keep it small.");
+  }
+
+  // -- drawing ------------------------------------------------------------------
+
+  // A line's path, thinned to pixel resolution when it has many more stations
+  // than the panel has pixels (the picture is the same, the drawing quicker).
+  function pathFor(xs, ys, base, i0, i1, sx, sy, widthPx) {
+    if (i1 - i0 + 1 > 2 * widthPx) return C.linePathIdx(xs, ys, base, C.decimate(xs, ys, base, i0, i1, sx), sx, sy);
+    return C.linePath(xs, ys, i0, i1, sx, sy, base);
+  }
+
+  function draw() {
+    if (!D) return;
+    var p = part(), r = raster(), tr = thiRaster();
+    syncControls(p, r);
+    var chart = $("chart");
+    while (chart.firstChild) chart.removeChild(chart.firstChild);
+    var W = Math.max(640, Math.floor($("chart-wrap").clientWidth || 900));
+    var H = Math.max(450, Math.min(Math.round(window.innerHeight - 140), Math.round(W * 0.64)));
+    chart.setAttribute("width", W);
+    chart.setAttribute("height", H);
+    chart.setAttribute("viewBox", "0 0 " + W + " " + H);
+    chart.setAttribute("font-family", FONT);
+    svg("rect", { x: 0, y: 0, width: W, height: H, fill: "#ffffff" }, chart);
+    var defs = svg("defs", {}, chart);
+
+    var lines = hasLines(p, r);
+    var xsOn = S.xs;
+    var L = 66, R = 14, T = 58, B = 62, GAP = 12;
+    var xsTotal = xsOn ? Math.max(220, Math.round(W * 0.27)) : 0;
+    var plotW = W - L - R - xsTotal;
+    var plotH = H - T - B;
+    var thiH = S.thi ? Math.round((plotH - GAP) * 0.25) : 0;
+    var mainH = S.thi ? plotH - GAP - thiH : plotH;
+    var main = { x: L, y: T, w: plotW, h: mainH };
+    var thi = S.thi ? { x: L, y: T + mainH + GAP, w: plotW, h: thiH } : null;
+    var multi = p.rasters.length > 1;
+
+    // The title and footer are part of the chart, so a saved PNG or SVG says
+    // what it shows; the footer is the saved charts' own provenance line.
+    text(chart, L, 20, p.name + (multi ? " · " + r.name : ""),
+         { "font-size": 13, "font-weight": 600, fill: "#222" });
+    if (p.footer) text(chart, 8, H - 7, p.footer, { "font-size": 10, fill: "#888" });
+
+    var n = p.x.length;
+    var full = [p.x[0], p.x[n - 1]];
+    var dom = S.domain || full;
+    if (!(dom[1] > dom[0])) dom = [full[0], full[0] + 1];
+    var range = C.indexRange(p.x, dom[0], dom[1]), i0 = range[0], i1 = range[1];
+    var sx = function (v) { return main.x + (v - dom[0]) / (dom[1] - dom[0]) * main.w; };
+
+    // Vertical extent from what is visible, so a zoom also rescales.
+    var lo = Infinity, hi = -Infinity;
+    function take(e) { if (e[0] < lo) lo = e[0]; if (e[1] > hi) hi = e[1]; }
+    LINES.forEach(function (s) { if (S.show[s[0]]) take(C.extent([r[s[1]]], i0, i1)); });
+    if (S.show.pband) take(C.extent([r.z_plo, r.z_phi], i0, i1));
+    if (S.show.profiles && lines) {
+      p.rows.forEach(function (row) {
+        take(C.matrixExtent(r.vals.subarray(row * n, (row + 1) * n), 1, n, i0, i1));
+      });
+    }
+    var noData = !(hi >= lo);
+    var yr = noData ? [0, 1] : C.padRange(lo, hi, 0.05);
+    var sy = function (v) { return main.y + main.h - (v - yr[0]) / (yr[1] - yr[0]) * main.h; };
+
+    clipRect(defs, "clip-main", main);
+    axes(chart, main, dom, yr, { xLabels: !thi, xTitle: p.scale.label, yTitle: r.name });
+    var g = svg("g", { "clip-path": "url(#clip-main)" }, chart);
+
+    if (S.show.profiles && lines) {
+      var colours = S.colour === "single" ? null : p.colours[S.colour];
+      p.rows.forEach(function (row) {
+        var dLine = pathFor(p.x, r.vals, row * n, i0, i1, sx, sy, main.w);
+        if (!dLine) return;
+        svg("path", { d: dLine, fill: "none", stroke: colours ? colours[row] : PAL.profiles,
+                      "stroke-width": (0.4 * PX).toFixed(2), "stroke-opacity": 0.6,
+                      "stroke-linejoin": "round", "pointer-events": "none" }, g);
+      });
+    }
+    if (S.show.min && S.show.max) band(g, p.x, r.z_min, r.z_max, i0, i1, sx, sy, PAL.fill, 0.12);
+    if (S.show.pband) band(g, p.x, r.z_plo, r.z_phi, i0, i1, sx, sy, PAL.pband, 0.15);
+    if (S.show.q1 && S.show.q3) band(g, p.x, r.z_q1, r.z_q3, i0, i1, sx, sy, PAL.fill, 0.10);
+    LINES.forEach(function (s) {
+      if (!S.show[s[0]] || !r[s[1]]) return;
+      var dd = pathFor(p.x, r[s[1]], 0, i0, i1, sx, sy, main.w);
+      if (!dd) return;
+      svg("path", { d: dd, fill: "none", stroke: PAL[s[2]], "stroke-width": (s[3] * PX).toFixed(2),
+                    "stroke-dasharray": dash(s[4], s[3]), "stroke-linejoin": "round",
+                    "pointer-events": "none" }, g);
+    });
+    if (noData) {
+      text(chart, main.x + main.w / 2, main.y + main.h / 2,
+           !p.has_data ? "No valid data in this profile (outside the sampling mask or the raster)"
+                       : "Nothing to show: turn on a series", { "text-anchor": "middle", fill: "#777" });
+    }
+    if (S.pinned !== null && S.pinned >= i0 && S.pinned <= i1) {
+      svg("line", { x1: sx(p.x[S.pinned]), x2: sx(p.x[S.pinned]), y1: main.y, y2: main.y + main.h,
+                    stroke: PAL.marker, "stroke-width": 1, "stroke-opacity": 0.85 }, chart);
+    }
+    legend(chart, main, p, lines);
+
+    if (thi) {
+      svg("rect", { x: thi.x, y: thi.y, width: thi.w, height: thi.h, fill: PAL.parchment }, chart);
+      clipRect(defs, "clip-thi", thi);
+      var syThi = function (v) { return thi.y + thi.h - v / 100 * thi.h; };
+      axes(chart, thi, dom, [0, 100], { xLabels: true, xTitle: p.scale.label,
+                                         yTitle: multi ? "THi (" + tr.name + ")" : "THi",
+                                         yTicks: [0, 25, 50, 75, 100], noGrid: true });
+      var gt = svg("g", { "clip-path": "url(#clip-thi)" }, chart);
+      [25, 75].forEach(function (v) {
+        svg("line", { x1: thi.x, x2: thi.x + thi.w, y1: syThi(v), y2: syThi(v), stroke: PAL.grid,
+                      "stroke-width": (0.4 * PX).toFixed(2), "stroke-dasharray": dash([1, 3], 0.4) }, gt);
+      });
+      svg("line", { x1: thi.x, x2: thi.x + thi.w, y1: syThi(50), y2: syThi(50), stroke: "#999999",
+                    "stroke-width": (0.6 * PX).toFixed(2), "stroke-dasharray": dash([4, 3], 0.6) }, gt);
+      var dt = tr.thi ? pathFor(p.x, tr.thi, 0, i0, i1, sx, syThi, thi.w) : "";
+      if (dt) {
+        svg("path", { d: dt, fill: "none", stroke: PAL.thi, "stroke-width": (0.9 * PX).toFixed(2),
+                      "stroke-linejoin": "round", "pointer-events": "none" }, gt);
+      }
+      if (S.pinned !== null && S.pinned >= i0 && S.pinned <= i1) {
+        svg("line", { x1: sx(p.x[S.pinned]), x2: sx(p.x[S.pinned]), y1: thi.y, y2: thi.y + thi.h,
+                      stroke: PAL.marker, "stroke-width": 1, "stroke-opacity": 0.85 }, chart);
+      }
+    }
+
+    if (xsOn) {
+      var xsBox = { x: L + plotW + 64, y: T, w: xsTotal - 64, h: mainH };
+      crossSectionPanel(chart, defs, xsBox, p, r, lines);
+    }
+
+    // Mouse layer: hover readout, click to pin, drag to zoom.
+    var top = main.y, bottom = thi ? thi.y + thi.h : main.y + main.h;
+    var ui = svg("g", { "class": "ui" }, chart);
+    var hover = svg("line", { y1: top, y2: bottom, stroke: "#555", "stroke-width": 0.8,
+                              "stroke-dasharray": "3 3", visibility: "hidden" }, ui);
+    var sel = svg("rect", { y: top, height: bottom - top, fill: "#01008a", "fill-opacity": 0.08,
+                            stroke: "#01008a", "stroke-opacity": 0.4, visibility: "hidden" }, ui);
+    var overlay = svg("rect", { x: main.x, y: top, width: main.w, height: bottom - top,
+                                fill: "transparent", style: "cursor: crosshair" }, ui);
+    G = { main: main, top: top, bottom: bottom, dom: dom, full: full, sx: sx,
+          i0: i0, i1: i1, hover: hover, sel: sel };
+    overlay.addEventListener("mousemove", onMove);
+    overlay.addEventListener("mouseleave", onLeave);
+    overlay.addEventListener("mousedown", onDown);
+    overlay.addEventListener("dblclick", function () { S.domain = null; draw(); });
+    info(p, r, lines);
+    document.body.setAttribute("data-swath-ready", "1");
+  }
+
+  function clipRect(defs, id, box) {
+    var cp = svg("clipPath", { id: id }, defs);
+    svg("rect", { x: box.x, y: box.y, width: box.w, height: box.h }, cp);
+  }
+
+  function band(g, xs, lo, hi, i0, i1, sx, sy, colour, alpha) {
+    if (!lo || !hi) return;
+    var d = C.bandPath(xs, lo, hi, i0, i1, sx, sy);
+    if (d) svg("path", { d: d, fill: colour, "fill-opacity": alpha, stroke: "none",
+                         "pointer-events": "none" }, g);
+  }
+
+  function axes(chart, box, xd, yd, opt) {
+    var xt = C.niceTicks(xd[0], xd[1], Math.max(4, Math.round(box.w / 95)));
+    var yt = opt.yTicks || C.niceTicks(yd[0], yd[1], Math.max(4, Math.round(box.h / 50)));
+    var xStep = xt.length > 1 ? xt[1] - xt[0] : 1, yStep = yt.length > 1 ? yt[1] - yt[0] : 1;
+    var sx = function (v) { return box.x + (v - xd[0]) / (xd[1] - xd[0]) * box.w; };
+    var sy = function (v) { return box.y + box.h - (v - yd[0]) / (yd[1] - yd[0]) * box.h; };
+    var g = svg("g", {}, chart);
+    if (!opt.noGrid) {
+      xt.forEach(function (v) {
+        svg("line", { x1: sx(v), x2: sx(v), y1: box.y, y2: box.y + box.h, stroke: PAL.grid,
+                      "stroke-width": 0.5, "stroke-opacity": 0.7 }, g);
+      });
+      yt.forEach(function (v) {
+        svg("line", { x1: box.x, x2: box.x + box.w, y1: sy(v), y2: sy(v), stroke: PAL.grid,
+                      "stroke-width": 0.5, "stroke-opacity": 0.7 }, g);
+      });
+    }
+    svg("rect", { x: box.x, y: box.y, width: box.w, height: box.h, fill: "none",
+                  stroke: PAL.axis, "stroke-width": 0.8 }, g);
+    yt.forEach(function (v) {
+      var y = sy(v);
+      if (y < box.y - 0.5 || y > box.y + box.h + 0.5) return;
+      svg("line", { x1: box.x, x2: box.x + 4, y1: y, y2: y, stroke: "#888", "stroke-width": 0.8 }, g);
+      text(g, box.x - 6, y + 4, C.formatTick(v, yStep), { "text-anchor": "end" });
+    });
+    xt.forEach(function (v) {
+      var x = sx(v);
+      if (x < box.x - 0.5 || x > box.x + box.w + 0.5) return;
+      svg("line", { x1: x, x2: x, y1: box.y + box.h - 4, y2: box.y + box.h, stroke: "#888",
+                    "stroke-width": 0.8 }, g);
+      if (opt.xLabels) text(g, x, box.y + box.h + 15, C.formatTick(v, xStep), { "text-anchor": "middle" });
+    });
+    if (opt.xLabels && opt.xTitle) {
+      text(g, box.x + box.w / 2, box.y + box.h + 34, opt.xTitle, { "text-anchor": "middle", "font-size": 12 });
+    }
+    if (opt.yTitle) {
+      text(g, 0, 0, opt.yTitle, { "text-anchor": "middle", "font-size": 12,
+                                  transform: "translate(" + (box.x - 50) + "," + (box.y + box.h / 2) + ") rotate(-90)" });
+    }
+  }
+
+  function legend(chart, main, p, lines) {
+    var items = [];
+    if (S.show.profiles && lines && S.colour !== "single") {
+      items.push({ label: p.side_labels[0], colour: PAL.side_left, width: 1.2 });
+      items.push({ label: p.side_labels[1], colour: PAL.side_right, width: 1.2 });
+    }
+    if (S.show.pband) {
+      items.push({ label: "P" + fmtPct(D.pct[0]) + "–P" + fmtPct(D.pct[1]), colour: PAL.pband,
+                   fill: 0.25 });
+    }
+    LINES.forEach(function (s) {
+      if (S.show[s[0]]) items.push({ label: s[5], colour: PAL[s[2]], width: s[3], dash: s[4] });
+    });
+    if (!items.length) return;
+    var g = svg("g", {}, chart);
+    var x = main.x, y = 38, rowH = 14, right = main.x + main.w;
+    var placed = [];
+    items.forEach(function (it) {
+      var t = text(g, 0, 0, it.label, { "font-size": 11 });
+      var w = 22 + (t.getComputedTextLength ? t.getComputedTextLength() : it.label.length * 6) + 14;
+      if (x + w > right && x > main.x) { x = main.x; y += rowH; }
+      placed.push({ it: it, t: t, x: x, y: y, w: w });
+      x += w;
+    });
+    var rows = {};
+    placed.forEach(function (q) { rows[q.y] = Math.max(rows[q.y] || 0, q.x + q.w); });
+    placed.forEach(function (q) {
+      var x0 = q.x + (right - rows[q.y]);
+      if (q.it.fill) {
+        svg("rect", { x: x0, y: q.y - 4, width: 18, height: 8, fill: q.it.colour,
+                      "fill-opacity": q.it.fill }, g);
+      } else {
+        svg("line", { x1: x0, x2: x0 + 18, y1: q.y, y2: q.y, stroke: q.it.colour,
+                      "stroke-width": (q.it.width * PX).toFixed(2),
+                      "stroke-dasharray": dash(q.it.dash, q.it.width) }, g);
+      }
+      q.t.setAttribute("x", x0 + 22);
+      q.t.setAttribute("y", q.y + 4);
+    });
+  }
+
+  function fmtPct(v) { return (+v).toString(); }
+
+  function crossSectionPanel(chart, defs, box, p, r, lines) {
+    var n = p.x.length;
+    var j = S.pinned !== null ? S.pinned : Math.floor(n / 2);
+    text(chart, box.x + box.w / 2, 42, "Cross-section at " + C.formatValue(p.x[j], p.scale.factor > 1 ? 3 : 1) +
+         (p.scale.unit ? " " + p.scale.unit : ""), { "text-anchor": "middle", "font-size": 12, fill: "#222" });
+    if (!lines) {
+      svg("rect", { x: box.x, y: box.y, width: box.w, height: box.h, fill: "none", stroke: PAL.axis,
+                    "stroke-width": 0.8 }, chart);
+      text(chart, box.x + box.w / 2, box.y + box.h / 2,
+           p.lines === "none" ? "No per-line samples (All-cells mode)"
+                              : "Per-line samples left out of this page",
+           { "text-anchor": "middle", fill: "#777" });
+      return;
+    }
+    var pts = C.crossSection(r.vals, p.off, n, j, p.sides);
+    var oLo = Infinity, oHi = -Infinity, zLo = Infinity, zHi = -Infinity;
+    pts.forEach(function (q) {
+      if (q.offset < oLo) oLo = q.offset;
+      if (q.offset > oHi) oHi = q.offset;
+      if (q.z < zLo) zLo = q.z;
+      if (q.z > zHi) zHi = q.z;
+    });
+    [r.z_min[j], r.z_max[j]].forEach(function (v) { if (v < zLo) zLo = v; if (v > zHi) zHi = v; });
+    var xr = C.padRange(oLo, oHi, 0.04);
+    var yr = (zHi >= zLo) ? C.padRange(zLo, zHi, 0.06) : [0, 1];
+    var sx = function (v) { return box.x + (v - xr[0]) / (xr[1] - xr[0]) * box.w; };
+    var sy = function (v) { return box.y + box.h - (v - yr[0]) / (yr[1] - yr[0]) * box.h; };
+    clipRect(defs, "clip-xs", box);
+    axes(chart, box, xr, yr, { xLabels: true, xTitle: "Across-track offset (map units)",
+                                yTitle: "Elevation" });
+    var g = svg("g", { "clip-path": "url(#clip-xs)" }, chart);
+    if (xr[0] < 0 && xr[1] > 0) {
+      svg("line", { x1: sx(0), x2: sx(0), y1: box.y, y2: box.y + box.h, stroke: "#999999",
+                    "stroke-width": 0.7 }, g);
+    }
+    [["z_mean", PAL.mean, [4, 2], 0.6], ["z_min", PAL.min, [2, 2], 0.6],
+     ["z_max", PAL.max, [2, 2], 0.6]].forEach(function (h) {
+      var v = r[h[0]][j];
+      if (!isFinite(v)) return;
+      svg("line", { x1: box.x, x2: box.x + box.w, y1: sy(v), y2: sy(v), stroke: h[1],
+                    "stroke-width": (h[3] * PX).toFixed(2), "stroke-dasharray": dash(h[2], h[3]),
+                    "stroke-opacity": h[0] === "z_mean" ? 0.7 : 1 }, g);
+    });
+    var xs = pts.map(function (q) { return q.offset; }), zs = pts.map(function (q) { return q.z; });
+    var dl = C.linePath(xs, zs, 0, pts.length - 1, sx, sy);
+    if (dl) svg("path", { d: dl, fill: "none", stroke: PAL.mean, "stroke-width": (1.0 * PX).toFixed(2) }, g);
+    var colours = S.colour === "single" ? null : p.colours[S.colour];
+    pts.forEach(function (q) {
+      if (!isFinite(q.z)) return;
+      svg("circle", { cx: sx(q.offset).toFixed(1), cy: sy(q.z).toFixed(1), r: 2.2,
+                      fill: colours ? colours[q.row] : PAL.mean }, g);
+    });
+  }
+
+  // -- readout ------------------------------------------------------------------
+
+  function stationAt(evt) {
+    var rect = $("chart").getBoundingClientRect();
+    var px = evt.clientX - rect.left;
+    var x = G.dom[0] + (px - G.main.x) / G.main.w * (G.dom[1] - G.dom[0]);
+    var j = C.nearestIndex(part().x, x);
+    return { j: Math.max(G.i0, Math.min(G.i1, j)), px: px, py: evt.clientY - rect.top };
+  }
+
+  // Hovering only moves the crosshair and rewrites the small readout; it never
+  // redraws the chart, so it stays smooth on long profiles.
+  function onMove(evt) {
+    if (!G) return;
+    var at = stationAt(evt);
+    if (drag) {
+      var a = Math.max(G.main.x, Math.min(drag.px, at.px));
+      var b = Math.min(G.main.x + G.main.w, Math.max(drag.px, at.px));
+      G.sel.setAttribute("x", a);
+      G.sel.setAttribute("width", Math.max(0, b - a));
+      G.sel.setAttribute("visibility", "visible");
+    }
+    var x = G.sx(part().x[at.j]);
+    G.hover.setAttribute("x1", x);
+    G.hover.setAttribute("x2", x);
+    G.hover.setAttribute("visibility", "visible");
+    tooltip(at);
+  }
+
+  function onLeave() {
+    if (!G) return;
+    G.hover.setAttribute("visibility", "hidden");
+    $("tip").hidden = true;
+  }
+
+  function onDown(evt) {
+    if (evt.button !== 0) return;
+    var at = stationAt(evt);
+    drag = { px: at.px, j: at.j };
+    evt.preventDefault();
+    window.addEventListener("mouseup", onUp, { once: true });
+  }
+
+  function onUp(evt) {
+    var start = drag;
+    drag = null;
+    if (!start || !G) return;
+    var at = stationAt(evt);
+    if (Math.abs(at.px - start.px) > 4) {
+      var inv = function (px) { return G.dom[0] + (px - G.main.x) / G.main.w * (G.dom[1] - G.dom[0]); };
+      var a = Math.max(G.full[0], inv(Math.min(start.px, at.px)));
+      var b = Math.min(G.full[1], inv(Math.max(start.px, at.px)));
+      if (b > a) S.domain = [a, b];
+    } else {
+      S.pinned = (S.pinned === at.j) ? null : at.j;
+    }
+    draw();
+  }
+
+  function tooltip(at) {
+    var p = part(), r = raster(), tr = thiRaster(), j = at.j;
+    var rows = [];
+    rows.push(["Distance", C.formatValue(p.x[j], p.scale.factor > 1 ? 3 : 1) +
+               (p.scale.unit ? " " + p.scale.unit : ""), null]);
+    var order = [["max", "z_max", "max", "Max"], ["q3", "z_q3", "quartile", "Q3"],
+                 ["median", "z_median", "median", "Median"], ["mean", "z_mean", "mean", "Mean"],
+                 ["centre", "z_centre", "centre", "Baseline"], ["q1", "z_q1", "quartile", "Q1"],
+                 ["min", "z_min", "min", "Min"]];
+    order.forEach(function (o) {
+      if (S.show[o[0]] && r[o[1]]) rows.push([o[3], C.formatValue(r[o[1]][j]), PAL[o[2]]]);
+    });
+    if (S.show.pband && r.z_plo && r.z_phi) {
+      rows.push(["P" + fmtPct(D.pct[0]) + "–P" + fmtPct(D.pct[1]),
+                 C.formatValue(r.z_plo[j]) + " – " + C.formatValue(r.z_phi[j]), PAL.pband]);
+    }
+    if (r.relief) rows.push(["Relief", C.formatValue(r.relief[j]), null]);
+    if (tr.thi) rows.push([p.rasters.length > 1 ? "THi (" + tr.name + ")" : "THi",
+                           C.formatValue(tr.thi[j], 1), PAL.thi]);
+    rows.push(["Valid samples", r.n_valid && isFinite(r.n_valid[j]) ? String(Math.round(r.n_valid[j])) : "-", null]);
+    var tip = $("tip");
+    while (tip.firstChild) tip.removeChild(tip.firstChild);
+    var table = el("table", {}, tip);
+    rows.forEach(function (row) {
+      var tr2 = el("tr", {}, table);
+      var td = el("td", {}, tr2);
+      if (row[2]) el("span", { "class": "sw", style: "background:" + row[2] }, td);
+      td.appendChild(document.createTextNode(row[0]));
+      el("td", { "class": "v" }, tr2, row[1]);
+    });
+    tip.hidden = false;
+    var wrap = $("chart-wrap").getBoundingClientRect();
+    var tw = tip.offsetWidth, th = tip.offsetHeight;
+    var left = at.px + 14;
+    if (left + tw > wrap.width - 4) left = at.px - tw - 14;
+    var topY = Math.max(4, Math.min(at.py - th / 2, G.bottom - th));
+    tip.style.left = Math.max(4, left) + "px";
+    tip.style.top = topY + "px";
+  }
+
+  function info(p, r, lines) {
+    var box = $("info");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    var line1 = el("p", {}, box);
+    el("b", {}, line1, p.name);
+    line1.appendChild(document.createTextNode(
+      " · " + r.name + " · " + p.n_stations + " stations, " + r.n_total +
+      " samples across" + (p.spacing !== null ? " · station spacing " + fmtNum(p.spacing) : "")));
+    var bits = ["P" + fmtPct(D.pct[0]) + "/P" + fmtPct(D.pct[1])];
+    if (D.crs) bits.push(D.crs);
+    el("p", {}, box, bits.join(" | "));
+    if (lines && S.show.profiles && S.colour !== "single") {
+      el("p", {}, box, "Sides: " + p.side_labels[0] + ", " + p.side_labels[1]);
+    }
+    if (lines && S.show.profiles && p.rows.length < p.n_line_rows) {
+      el("p", {}, box, "Showing " + p.rows.length + " of " + p.n_line_rows +
+         " profile lines, evenly spaced, including the centre and both edges; the " +
+         "statistics and the cross-section use them all.");
+    }
+    var tail = "Run " + (D.title || "") + " · SwathProfile " + (D.tool_version || "");
+    if (D.created) tail += " · created " + D.created;
+    if (D.elapsed !== null && D.elapsed !== undefined) tail += " · computed in " + D.elapsed.toFixed(1) + " s";
+    el("p", {}, box, tail);
+  }
+
+  function fmtNum(v) { return String(Math.round(v * 100) / 100); }
+
+  // -- keyboard -------------------------------------------------------------------
+
+  function onKey(evt) {
+    var tag = (evt.target && evt.target.tagName) || "";
+    if (tag === "SELECT" || tag === "INPUT") return;
+    var p = part(), n = p.x.length;
+    if (evt.key === "ArrowLeft" || evt.key === "ArrowRight") {
+      var j = S.pinned !== null ? S.pinned : Math.floor(n / 2);
+      S.pinned = Math.max(0, Math.min(n - 1, j + (evt.key === "ArrowLeft" ? -1 : 1)));
+      draw();
+      evt.preventDefault();
+    } else if (evt.key === "ArrowUp" || evt.key === "ArrowDown") {
+      selectPart(S.part + (evt.key === "ArrowUp" ? -1 : 1));
+      evt.preventDefault();
+    } else if (evt.key === "Home") {
+      S.domain = null;
+      draw();
+    } else if (evt.key === "Escape") {
+      S.pinned = null;
+      draw();
+    }
+  }
+
+  // -- saving -------------------------------------------------------------------
+
+  function stem() {
+    var s = (D.title || "swath") + "_" + part().name;
+    return s.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "swath";
+  }
+
+  function svgText() {
+    var clone = $("chart").cloneNode(true);
+    var uis = clone.querySelectorAll(".ui");
+    for (var i = 0; i < uis.length; i++) uis[i].parentNode.removeChild(uis[i]);
+    clone.setAttribute("xmlns", NS);
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
+  }
+
+  function download(blob, name) {
+    var url = URL.createObjectURL(blob);
+    var a = el("a", { href: url, download: name }, document.body);
+    a.click();
+    a.parentNode.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+  }
+
+  function saveSvg() {
+    download(new Blob([svgText()], { type: "image/svg+xml;charset=utf-8" }), stem() + ".svg");
+  }
+
+  // The SVG is drawn onto a canvas at twice its size.  A data: URL is tried
+  // first, then a blob: URL (some browsers refuse very long data: URLs), then
+  // the user is told to save the SVG instead.
+  function savePng() {
+    var chart = $("chart");
+    var w = +chart.getAttribute("width"), h = +chart.getAttribute("height"), k = 2;
+    var source = svgText();
+    var failed = function () {
+      window.alert("This browser would not turn the chart into a PNG here. Save SVG instead; " +
+                   "any drawing program or browser can convert it.");
+    };
+    var attempt = function (src, done, next) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var canvas = el("canvas", {});
+          canvas.width = w * k;
+          canvas.height = h * k;
+          var ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(function (b) {
+            done();
+            if (b) download(b, stem() + ".png"); else next();
+          }, "image/png");
+        } catch (e) { done(); next(); }
+      };
+      img.onerror = function () { done(); next(); };
+      img.src = src;
+    };
+    attempt("data:image/svg+xml;charset=utf-8," + encodeURIComponent(source), function () {}, function () {
+      var url = URL.createObjectURL(new Blob([source], { type: "image/svg+xml;charset=utf-8" }));
+      attempt(url, function () { URL.revokeObjectURL(url); }, failed);
+    });
+  }
+
+  function debounce(fn, ms) {
+    var t = null;
+    return function () { clearTimeout(t); t = setTimeout(fn, ms); };
+  }
+
+  function fail(err) {
+    var box = $("error");
+    box.hidden = false;
+    box.textContent = "The chart could not be drawn: " + (err && err.message ? err.message : err);
+    document.body.setAttribute("data-swath-error", String(err && err.message ? err.message : err));
+  }
+
+  function init() {
+    try {
+      var node = $("swath-data");
+      D = JSON.parse(node.textContent);
+      node.textContent = "";                    // the parsed copy is all that is needed
+      PAL = D.palette;
+      var mode = (D.config || {}).chart_profile_colour;
+      if (COLOUR_MODES.some(function (m) { return m[0] === mode; })) S.colour = mode;
+      if (!D.parts.length) throw new Error("this result has no profiles");
+      buildControls();
+      selectPart(0);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();
+</script>
+</body>
+</html>

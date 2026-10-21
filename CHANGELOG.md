@@ -39,8 +39,39 @@
     window and saved charts name the mask.
   - Profiles, stretches and raster blocks the mask removes completely are not
     read. No geoprocessing calls are added.
+- **Browser chart with every run.** `<table name>.html` beside the saved result
+  in `swath_results`: one self-contained page that opens in any modern
+  browser, needs no Python, no internet and no libraries, and can be sent to
+  colleagues without ArcGIS. Profile list, the swath envelope with series
+  toggles and side colours, the THi panel, a readout on hover, the
+  cross-section at a clicked station, drag-to-zoom, and PNG/SVG export with
+  the title and provenance footer drawn in. Its numbers, colours, side labels
+  and footer come from the same code as the saved charts. A security policy in
+  the page forbids it any network access. Each profile is decoded only when it
+  is shown, at most 101 offset lines are drawn, and long profiles are thinned
+  to screen resolution without losing any extreme, so runs of hundreds of
+  transects stay quick. Per-line samples beyond a budget are left out (the
+  THi raster's are kept first), both the page and the run say so, the run
+  reports the page's size, and a page too large to open comfortably is not
+  written.
 
 ### Fixed
+- **On computers whose security software allows only approved programs, the
+  chart window was silently blocked and retried on every run.** The tool never
+  checked that the window had started: it reported success, or suggested
+  `SwathViewer.cmd`, which is blocked the same way, and each run raised another
+  notice (usually logged for IT). It now confirms the window started, says
+  plainly when it did not, opens the browser chart instead, and remembers that
+  computer so it does not try again until asked. The viewer writes a start
+  marker before its heavy imports, so a normal start is confirmed in under
+  three seconds. A window that starts and then closes, or a missing Python, is
+  reported as what it is and remembered for the session only, and the window's
+  error output is kept in a `.viewer.log` beside the live result and quoted.
+  This logic is in the new arcpy-free `swathprofile/chartwindow.py`, tested in
+  CI, including with real stand-in programs.
+- **Saved chart images went to ArcGIS Pro's scratch folder** when *Chart
+  Folder* was left empty, not beside the results as its help said. They now go
+  to `swath_results`.
 - **All cells mode ignored *Minimum Valid Samples per Station*.** Only the
   offset-lines path applied it. It now nulls stations with too few valid cells
   in both modes, before relief, HI and THi are computed.
@@ -82,6 +113,11 @@
   *Sampling mask* parameters were inserted, so scripts that pass the tool's
   parameters by position rather than by name need updating from *Sampling
   Method* onward.
+- *Show Interactive Chart* is now a choice rather than a check box:
+  *Automatic* (default), *Chart window*, *Browser page* or *Off*. Scripts that
+  still pass true or false get *Automatic* or *Off*: the value is converted
+  before the dialog checks it. Choosing *Chart window* on a computer where the
+  window is known not to start shows a warning first.
 - Saved charts state each profile's own swath width and line count in the
   footer (transects can differ from the main baseline), and a profile with no
   valid data in any raster no longer gets an empty chart.

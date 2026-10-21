@@ -2,11 +2,11 @@
 <metadata xml:lang="en">
     <Esri>
         <CreaDate>20261021</CreaDate>
-        <CreaTime>11293300</CreaTime>
+        <CreaTime>14190800</CreaTime>
         <ArcGISFormat>1.0</ArcGISFormat>
         <SyncOnce>TRUE</SyncOnce>
         <ModDate>20261021</ModDate>
-        <ModTime>112933</ModTime>
+        <ModTime>141908</ModTime>
     </Esri>
     <tool name="SwathProfileTool" displayname="Swath Profile" toolboxalias="swathprofile" xmlns="">
         <arcToolboxHelpPath>c:\program files\arcgis\pro\Resources\Help\gp</arcToolboxHelpPath>
@@ -417,19 +417,27 @@
             <param name="out_chart_folder" displayname="Chart Folder" type="Optional" direction="Output" datatype="Folder" expression="{out_chart_folder}">
                 <dialogReference>
                     <para>Folder for the saved chart files.</para>
-                    <para>Defaults to the folder holding the statistics table.</para>
+                    <para>Defaults to the swath_results folder beside the statistics table, where each run's saved result and browser chart also go.</para>
                 </dialogReference>
                 <pythonReference>
                     <para>Folder for the saved chart files.</para>
                 </pythonReference>
             </param>
-            <param name="open_viewer" displayname="Show Interactive Chart" type="Optional" direction="Input" datatype="Boolean" expression="{open_viewer}">
+            <param name="open_viewer" displayname="Show Interactive Chart" type="Optional" direction="Input" datatype="String" expression="{open_viewer}">
                 <dialogReference>
-                    <para>Show the interactive chart window.</para>
-                    <para>On by default. The window runs as a separate program: it stays open, refreshes with each run, and can be reopened later with SwathViewer.cmd on any saved .swath.npz result.</para>
+                    <para>Where to show the interactive chart: the chart window or a page in your web browser.</para>
+                    <para>The chart window is a separate Python program. It stays open, adds each run's profiles to its list, and can be reopened later with SwathViewer.cmd on any saved .swath.npz result.</para>
+                    <para>On a computer where security software lets only approved programs run, the chart window can be blocked; each attempt then usually shows a notice and is logged for IT. The tool checks that the window really started, says so when it did not, opens the browser chart instead and remembers, so it does not try again on that computer. To use the window there, ask IT to approve the toolbox's viewer folder, then choose Chart window once.</para>
+                    <para>The browser chart is written on every run beside the saved result, as &lt;table name&gt;.html in swath_results. It needs no Python and no internet, and can be sent to someone without ArcGIS: profile list, the swath envelope with series toggles and side colours, the THi panel, a readout on hover, a cross-section where you click, zoom, and PNG or SVG export.</para>
+                    <bulletList>
+                        <bullet_item>Automatic - the chart window, or the browser chart on a computer where the window cannot run (default).</bullet_item>
+                        <bullet_item>Chart window - always try the window, for example after IT has approved it; still falls back to the browser chart.</bullet_item>
+                        <bullet_item>Browser page - open the browser chart and never start the window.</bullet_item>
+                        <bullet_item>Off - show nothing; the browser chart is still written.</bullet_item>
+                    </bulletList>
                 </dialogReference>
                 <pythonReference>
-                    <para>Show the interactive chart window.</para>
+                    <para>Where to show the interactive chart: the chart window or a page in your web browser.</para>
                 </pythonReference>
             </param>
             <param name="add_to_map" displayname="Add Outputs to Map" type="Optional" direction="Input" datatype="Boolean" expression="{add_to_map}">
@@ -474,7 +482,7 @@
         </summary>
         <usage>
             <para>Lines and rasters may be in any coordinate system; the swath is computed in a projected working system (the first projected raster's, else the baseline's, else a UTM zone) and samples are transformed into each raster's own system.</para>
-            <para>Leave the chart window open between runs: each run adds its profiles to the window's list so you can compare them.</para>
+            <para>Leave the chart window open between runs: each run adds its profiles to the window's list so you can compare them. Every run also writes a browser chart (an .html file in swath_results) that needs no Python, for computers where the chart window is blocked and for colleagues without ArcGIS.</para>
             <para>For high-resolution DEMs or wide bands, choose the All cells sampling method: offset lines skip most of the cells in the band and the tool will tell you what fraction.</para>
             <para>To measure one surface only - a fan, not the bedrock beside it - draw or choose a Sampling Mask. Everything outside it (or inside it, in Exclude mode) is left out of the statistics, and the band and offset lines on the map are cut to match.</para>
         </usage>

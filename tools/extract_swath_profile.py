@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import datetime
 import os
-import subprocess
 import sys
 import time
 
@@ -20,7 +19,7 @@ import numpy as np
 import arcpy
 
 from swathprofile import __version__
-from swathprofile import features, outputs, plotting, raster_io
+from swathprofile import chartwindow, features, outputs, plotting, raster_io
 from swathprofile.bundle import BUNDLE_SUFFIX, save_bundle
 from swathprofile.config import SwathConfig, estimate_run
 from swathprofile.engine import run_swath
@@ -41,11 +40,13 @@ MASK_MODES = {"Keep only inside": "keep", "Exclude inside": "exclude"}
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIEWER_SCRIPT = os.path.join(ROOT, "viewer", "swath_viewer.py")
 
-#: Seconds since the viewer's last heartbeat before it is considered gone.
-HEARTBEAT_STALE = 8.0
 #: Warn before Run when the estimated time exceeds this.
 ESTIMATE_WARN_SECONDS = 120.0
 
+#: Choices for Show Interactive Chart (see swathprofile/chartwindow.py).
+VIEWER_AUTO, VIEWER_WINDOW, VIEWER_PAGE, VIEWER_OFF = (
+    chartwindow.AUTO, chartwindow.WINDOW, chartwindow.PAGE, chartwindow.OFF)
+VIEWER_MODES = chartwindow.MODES
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -342,26 +343,6 @@ def _python_for_viewer():
         f"{sys.prefix}. The result bundle was still written.")
 
 
-def _viewer_alive(bundle_path) -> bool:
-    lock = bundle_path + ".lock"
-    try:
-        return (time.time() - os.path.getmtime(lock)) < HEARTBEAT_STALE
-    except OSError:
-        return False
-
-
-def _launch_viewer(bundle_path, msg):
-    exe = _python_for_viewer()
-    flags = 0
-    for name in ("CREATE_NO_WINDOW", "DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
-        flags |= getattr(subprocess, name, 0)
-    env = dict(os.environ)
-    env["PYTHONPATH"] = ROOT + os.pathsep + env.get("PYTHONPATH", "")
-    subprocess.Popen([exe, VIEWER_SCRIPT, bundle_path], cwd=ROOT, env=env,
-                     creationflags=flags, close_fds=True)
-    msg.info(f"  Viewer launched with {exe}")
-
-
 # ---------------------------------------------------------------------------
 # the tool
 # ---------------------------------------------------------------------------
@@ -595,9 +576,11 @@ class SwathProfileTool(object):
         chart_dir = p("out_chart_folder", "Chart Folder", "DEFolder",
                       direction="Output", category="Outputs")
 
-        viewer = p("open_viewer", "Show Interactive Chart", "GPBoolean",
+        viewer = p("open_viewer", "Show Interactive Chart", "GPString",
                    category="Outputs")
-        viewer.value = True
+        viewer.filter.type = "ValueList"
+        viewer.filter.list = list(VIEWER_MODES)
+        viewer.value = VIEWER_AUTO
 
         add_map = p("add_to_map", "Add Outputs to Map", "GPBoolean",
                     category="Outputs")
@@ -698,6 +681,13 @@ class SwathProfileTool(object):
         pr["mask_mode"].enabled = (pr["mask_draw"].value is not None or
                                    pr["mask_layer"].value is not None)
 
+        # Show Interactive Chart used to be a check box.  This runs before the
+        # value list is checked, so a script still passing True or False gets
+        # "Automatic" or "Off" instead of a validation error.
+        label = chartwindow.legacy_label(pr["open_viewer"].valueAsText)
+        if label:
+            pr["open_viewer"].value = label
+
         fmts = set(pr["chart_formats"].values or [])
         pr["out_chart_folder"].enabled = bool(fmts & {"PNG", "PDF", "SVG"})
         pr["chart_preset"].enabled = bool(fmts & {"PNG", "PDF", "SVG"})
@@ -747,6 +737,15 @@ class SwathProfileTool(object):
                 pr["mask_draw"].setWarningMessage(
                     "No polygon has been finished yet: double-click to close it. "
                     "An empty sketch is ignored and the run is not masked.")
+
+        if chartwindow.parse_mode(pr["open_viewer"].valueAsText) == VIEWER_WINDOW:
+            known = chartwindow.remembered(persistent_only=True)
+            if known:
+                pr["open_viewer"].setWarningMessage(
+                    f"The chart window could not start on this computer on "
+                    f"{known['since']}. '{VIEWER_WINDOW}' tries it again, and security "
+                    "software may show its notice again; the browser chart opens if "
+                    "it still cannot start.")
 
         for value in rasters:
             try:
@@ -1345,7 +1344,9 @@ class SwathProfileTool(object):
         fmts = set(pr["chart_formats"].values or [])
         image_fmts = fmts & {"PNG", "PDF", "SVG"}
         if image_fmts:
-            folder = pr["out_chart_folder"].valueAsText or arcpy.env.scratchFolder
+            # Beside the saved results, not in Pro's scratch folder, which is
+            # hidden away and where nobody would look for them.
+            folder = pr["out_chart_folder"].valueAsText or results_dir
             self._write_charts(folder, result, cfg, image_fmts,
                                pr["chart_preset"].valueAsText or "Screen", msg,
                                cfg.chart_profile_colour)
@@ -1354,9 +1355,9 @@ class SwathProfileTool(object):
             os.path.join(arcpy.env.scratchFolder, "swath_live" + BUNDLE_SUFFIX)
         self._publish_bundle(bundle, result, os.path.basename(table_path),
                              results_dir, msg)
+        page = self._write_page(result, os.path.basename(table_path), results_dir, msg)
         tick(f"Done: computation {result.elapsed:.1f} s, total")
-        if pr["open_viewer"].value:
-            self._show_viewer(bundle, msg)
+        self._show_chart(pr["open_viewer"].valueAsText, bundle, page, msg)
 
     # -- layer files for the outputs ------------------------------------------
 
@@ -1408,24 +1409,8 @@ class SwathProfileTool(object):
 
     @staticmethod
     def _chart_footer(cfg, g=None):
-        """Provenance line for a saved chart, using the part's own settings.
-
-        Transects can run at their own width, so the width and line count come
-        from the part where possible; the sampling mask is named when one was
-        used, with the share of the band it kept.
-        """
-        g = g or {}
-        width = float(g.get("width") or cfg.swath_width)
-        n_lines = int(g.get("n_lines") or (cfg.n_lines if cfg.is_offset else 0))
-        lines = f"{n_lines} profiles | " if n_lines else ""
-        mask = ""
-        if cfg.mask_mode:
-            verb = "keep inside" if cfg.mask_mode == "keep" else "exclude inside"
-            kept = g.get("mask_kept")
-            mask = f"mask: {verb}" + (f" ({kept:.0f}% of band) | " if kept is not None
-                                      else " | ")
-        return (f"swath width {width:g} | step {cfg.step:g} | {lines}"
-                f"{g.get('method') or cfg.method} | {mask}SwathProfile {cfg.tool_version}")
+        """The saved charts' provenance line; shared with the browser chart."""
+        return plotting.chart_footer(cfg, g)
 
     def _write_charts(self, folder, result, cfg, formats, preset, msg,
                       profile_colour="single"):
@@ -1507,14 +1492,41 @@ class SwathProfileTool(object):
                      f"({type(exc).__name__}: {exc}); the live bundle is {bundle}.")
 
     @staticmethod
-    def _show_viewer(bundle, msg):
-        """Refresh a running viewer, or start one."""
+    def _write_page(result, title, results_dir, msg):
+        """Write this run's browser chart beside its permanent result copy.
+
+        Written on every run, whatever Show Interactive Chart says: it needs no
+        Python to open, so it is also the copy to send to someone without
+        ArcGIS.  A failure here never fails the run.
+        """
+        from swathprofile import webchart
+
+        path = os.path.join(results_dir, f"{title}.html")
         try:
-            if _viewer_alive(bundle):
-                msg.info("  Interactive chart refreshed in the open viewer window.")
-                return
-            _launch_viewer(bundle, msg)
-            msg.info("  Interactive chart opened in a separate window.")
+            report = webchart.write_web_chart(path, result, title=title, messenger=msg)
         except Exception as exc:
-            msg.warn(f"  Could not open the viewer ({type(exc).__name__}: {exc}). "
-                     f"Open it later with SwathViewer.cmd and choose {bundle}.")
+            msg.warn(f"  Could not write the browser chart ({type(exc).__name__}: {exc}).")
+            return None
+        mb = report["bytes"] / 1e6
+        if not report["written"]:
+            msg.warn(f"  The browser chart would be {mb:.0f} MB, more than browsers open "
+                     f"comfortably ({webchart.PAGE_LIMIT / 1e6:.0f} MB), so it was not "
+                     "written. Run fewer profiles at a time, or use a larger step.")
+            return None
+        msg.info(f"  Browser chart -> {path} ({mb:.1f} MB)")
+        if report["bytes"] > webchart.EMAIL_HINT:
+            msg.info("  At that size the browser chart is too big for most email; zip "
+                     "it, or share it through a folder.")
+        return path
+
+    @staticmethod
+    def _show_chart(mode, bundle, page, msg):
+        """Show the run in the chart window or the browser chart, per *mode*.
+
+        All of the decision - including finding out whether the window really
+        started, and remembering when it cannot on this computer - is in
+        swathprofile.chartwindow, which needs no arcpy and is tested in CI.
+        """
+        return chartwindow.show_chart(mode, bundle=bundle, page=page,
+                                      viewer=VIEWER_SCRIPT, root=ROOT,
+                                      find_python=_python_for_viewer, msg=msg)

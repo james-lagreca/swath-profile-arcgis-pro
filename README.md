@@ -24,6 +24,9 @@ median, quartiles and chosen percentiles, local relief, hypsometric integral
 - Chart window that stays open across runs: cross‑sections, measurements,
   re‑zero at the fault, detrend, overlay or stacked ridgeline of several
   profiles, publication presets.
+- A browser chart with every run: one offline HTML file that needs no Python,
+  for computers whose security software blocks the chart window and for
+  colleagues without ArcGIS.
 - Profile lines colourable by which side of the baseline they came from, in the
   chart and on the offset‑lines layer in the map, with the compass direction of
   each side named in the legend.
@@ -144,14 +147,66 @@ list, so you can draw line after line and compare. Its maths lives in
 | **File → Export CSV** | The current profile as shown (with re‑zeroed distance), plus a measurements file if any. |
 | **File → Show results folder** | Opens the folder of saved results. |
 
-`SwathViewer.cmd` opens the viewer without ArcGIS Pro — drag a `.swath.npz`
-result onto it, or run it and pick one. Every run keeps a permanent copy of its
+`SwathViewer.cmd` opens the viewer without starting ArcGIS Pro — drag a
+`.swath.npz` result onto it, or run it and pick one. It still uses ArcGIS Pro's
+Python, so it needs Pro installed. Every run keeps a permanent copy of its
 result in `<project folder>\swath_results\`.
 
 Why a separate window: ArcGIS Pro owns its process's UI thread, so a chart
 window inside a running Python tool would freeze Pro, and Qt is not present in
 `arcgispro-py3`. The chart↔map link is provided by the native chart on the
 station points instead.
+
+### The browser chart, and computers that block the chart window
+
+Every run also writes a **browser chart**: `<table name>.html` beside the saved
+result in `swath_results`. It is one self-contained file that opens in Edge,
+Chrome, Firefox or Safari, needs no Python, no internet and nothing installed,
+and can be emailed to someone without ArcGIS. It has the profile list, the
+swath envelope with the same series toggles and side colours as the window,
+the THi panel, a readout on hover, the cross‑section at a clicked station
+(arrow keys step along), drag‑to‑zoom, and PNG or SVG export with the title and
+the same provenance footer as the saved charts. It is a snapshot of one run,
+and each run opens in a new browser tab; the chart window remains the place to
+compare runs, smooth, measure, re‑zero, detrend and stack. A swath of more
+than 101 offset lines shows 101 of them, evenly spaced, though the statistics
+use them all.
+
+The page is typically a few megabytes. Very large runs, such as hundreds of
+transects on LiDAR, keep every statistic but leave out per‑line samples beyond
+a budget, which the page and the run both say; the run also reports the page's
+size and warns when it is too big for most email. Some email systems block or
+quarantine HTML attachments with scripts in them: zip the page, or share it
+through a folder.
+
+Some organisations run security software that lets only approved programs
+start (Airlock Digital, AppLocker, WDAC and similar). The toolbox itself is
+unaffected, because it runs inside ArcGIS Pro, but the chart window is a
+separate Python program and can be blocked, as can `SwathViewer.cmd`. The tool
+checks that the window really started. If it did not, it says so, opens the
+browser chart instead, and remembers, so that computer is not asked again (each
+attempt would raise another notice, and such systems usually log every block
+for IT). *Show Interactive Chart* controls this:
+
+| | |
+|---|---|
+| **Automatic** (default) | The chart window, or the browser chart where the window can't run. |
+| **Chart window** | Always try the window, for example after IT has approved it; still falls back. |
+| **Browser page** | Open the browser chart and never start the window. |
+| **Off** | Show nothing. The browser chart is still written. |
+
+To get the window on such a computer, ask IT to approve the toolbox's `viewer`
+folder, then choose *Chart window* once. Approval by file hash would need
+renewing after every update of the tool, because the hash changes. If ArcGIS
+Pro uses a cloned Python environment, that environment's `pythonw.exe` may need
+approving as well. Ask IT rather than moving the toolbox into a folder that
+happens to be approved already; the tool itself never tries to get the window
+past such a block.
+
+From the tool's side a block and some other start‑up faults look the same, so
+its messages say what happened rather than guess why. A window that starts and
+then closes is treated as a fault, not a block, and is tried again in the next
+Pro session.
 
 The tool never touches the map while it runs, and it makes as few
 geoprocessing‑tool calls as possible. Inside a large Pro project every
@@ -239,10 +294,18 @@ interpolation is exact on a plane, detrending a plane profile gives exactly
 zero, transects on a circular trace are exactly radial — so a failure localises
 the bug rather than merely signalling one. `test_tool_e2e.py` drives the
 geoprocessing tool through its real parameter objects, transects included.
-`test_core.py`, `test_transforms.py` and `test_mask.py` run without ArcGIS
-and in CI; `test_mask.py` drives the whole engine on an in-memory raster
-(`tests/fake_raster.py`), which is how the sampling mask and the all-cells
-mode's block-size invariance are checked there.
+`test_core.py`, `test_transforms.py`, `test_mask.py`, `test_chartwindow.py`,
+`test_webchart.py` and `test_webchart_render.py` run without ArcGIS and in CI; `test_mask.py` drives
+the whole engine on an in-memory raster (`tests/fake_raster.py`), which is how
+the sampling mask and the all-cells mode's block-size invariance are checked
+there. `test_webchart_render.py` loads browser charts in headless Chrome or
+Edge and drives them like a person would — hover, click, drag, keys, saving —
+and is skipped when neither browser is installed. The page's pure JavaScript
+has its own tests, run with Node:
+
+```bash
+node --test tests/js/webchart_core.test.js
+```
 
 ### Trying transects in Pro
 
@@ -284,6 +347,9 @@ swathprofile/
   smoothing.py    NaN-safe Savitzky-Golay                                  [no arcpy]
   transforms.py   detrend, re-zero/flip, cross-section, measure            [no arcpy]
   mask.py         sampling mask: point and cell tests, one crossing rule   [no arcpy]
+  webchart.py     the browser chart: run data into one offline HTML page   [no arcpy]
+  chartwindow.py  chart window or browser chart; detects a blocked window   [no arcpy]
+  templates/webchart.html  the browser chart's page, CSS and JavaScript (no libraries)
   plotting.py     figure builder, overlay, presets                         [no arcpy]
   bundle.py       .swath.npz round trip (v2, reads v1)                     [no arcpy]
   config.py       run configuration + pre-run estimate                     [no arcpy]

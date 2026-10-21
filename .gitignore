@@ -9,6 +9,8 @@ scratch/
 *.swath.npz
 *.tmp.npz
 *.lock
+*.started
+*.viewer.log
 
 # Toolbox-level metadata stub that ArcGIS Pro rewrites on every open.
 # The tool-level help file (SwathProfile.SwathProfileTool.pyt.xml) IS tracked.

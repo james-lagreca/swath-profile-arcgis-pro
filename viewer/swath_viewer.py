@@ -22,13 +22,29 @@ Usage::
 
 from __future__ import annotations
 
-import csv
-import datetime
 import os
 import sys
 import time
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+
+# Tell the tool that launched us, as early as possible, that this process really
+# is running our code.  It runs before tkinter and matplotlib are imported (a
+# second or more), so the tool can tell "started" from "never ran" quickly.  If
+# security software that allows only approved programs stops this script, the
+# file never appears and the tool offers the browser chart instead.  The tool
+# names the file (swathprofile.chartwindow.MARKER_ENV); opened by hand, the
+# viewer writes nothing.
+_STARTED = os.environ.pop("SWATH_PROFILE_STARTED_FILE", "")
+if __name__ == "__main__" and _STARTED:
+    try:
+        with open(_STARTED, "w") as _fh:
+            _fh.write(f"{os.getpid()} {time.time():.3f}\n")
+    except OSError:
+        pass
+
+import csv                                                # noqa: E402
+import datetime                                           # noqa: E402
+import tkinter as tk                                      # noqa: E402
+from tkinter import filedialog, messagebox, ttk           # noqa: E402
 
 # High-DPI: without this Tk renders blurry and undersized on scaled displays.
 if sys.platform == "win32":

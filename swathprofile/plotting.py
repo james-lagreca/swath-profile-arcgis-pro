@@ -19,7 +19,7 @@ import warnings
 import numpy as np
 
 __all__ = ["PALETTE", "SERIES", "DEFAULT_SHOW", "PRESETS", "OVERLAY_COLOURS",
-           "PROFILE_COLOUR_MODES", "side_labels", "profile_colours",
+           "PROFILE_COLOUR_MODES", "side_labels", "profile_colours", "chart_footer",
            "use_agg", "preset_context", "build_figure", "build_overlay_figure",
            "build_ridgeline_figure", "draw_cross_section", "save_figure"]
 
@@ -150,6 +150,28 @@ def _fade(colour, strength: float):
     t = float(np.clip(strength, 0.0, 1.0)) * 0.75 + 0.25
     r, g, b = to_rgb(colour)
     return (r * t + (1 - t) * 0.88, g * t + (1 - t) * 0.88, b * t + (1 - t) * 0.88)
+
+
+def chart_footer(cfg, g=None) -> str:
+    """Provenance line for a chart of one profile, using the part's own settings.
+
+    Transects can run at their own width, so the width and line count come
+    from the part's geometry record *g* where it has them; the sampling mask is
+    named when one was used, with the share of the band it kept.  The saved
+    charts and the browser chart both use this, so they always agree.
+    """
+    g = g or {}
+    width = float(g.get("width") or cfg.swath_width)
+    n_lines = int(g.get("n_lines") or (cfg.n_lines if cfg.is_offset else 0))
+    lines = f"{n_lines} profiles | " if n_lines else ""
+    mask = ""
+    if cfg.mask_mode:
+        verb = "keep inside" if cfg.mask_mode == "keep" else "exclude inside"
+        kept = g.get("mask_kept")
+        mask = f"mask: {verb}" + (f" ({kept:.0f}% of band) | " if kept is not None
+                                  else " | ")
+    return (f"swath width {width:g} | step {cfg.step:g} | {lines}"
+            f"{g.get('method') or cfg.method} | {mask}SwathProfile {cfg.tool_version}")
 
 
 def use_agg():

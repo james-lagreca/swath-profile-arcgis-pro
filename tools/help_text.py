@@ -23,7 +23,9 @@ TOOL_USAGE = [
     "projected working system (the first projected raster's, else the baseline's, "
     "else a UTM zone) and samples are transformed into each raster's own system.",
     "Leave the chart window open between runs: each run adds its profiles to the "
-    "window's list so you can compare them.",
+    "window's list so you can compare them. Every run also writes a browser chart "
+    "(an .html file in swath_results) that needs no Python, for computers where "
+    "the chart window is blocked and for colleagues without ArcGIS.",
     "For high-resolution DEMs or wide bands, choose the All cells sampling method: "
     "offset lines skip most of the cells in the band and the tool will tell you "
     "what fraction.",
@@ -333,7 +335,8 @@ PARAM_HELP = {
          "baseline, so how far out a profile sits is readable too."]),
     "out_chart_folder": (
         "Folder for the saved chart files.",
-        ["Defaults to the folder holding the statistics table."],
+        ["Defaults to the swath_results folder beside the statistics table, where "
+         "each run's saved result and browser chart also go."],
         []),
     "add_to_map": (
         "Add the outputs (band, station points, transects, table) to the map when "
@@ -345,11 +348,28 @@ PARAM_HELP = {
          "are still written and can be added later."],
         []),
     "open_viewer": (
-        "Show the interactive chart window.",
-        ["On by default. The window runs as a separate program: it stays open, "
-         "refreshes with each run, and can be reopened later with "
-         "SwathViewer.cmd on any saved .swath.npz result."],
-        []),
+        "Where to show the interactive chart: the chart window or a page in your "
+        "web browser.",
+        ["The chart window is a separate Python program. It stays open, adds each "
+         "run's profiles to its list, and can be reopened later with "
+         "SwathViewer.cmd on any saved .swath.npz result.",
+         "On a computer where security software lets only approved programs run, "
+         "the chart window can be blocked; each attempt then usually shows a notice "
+         "and is logged for IT. The tool checks that the window really started, says "
+         "so when it did not, opens the browser chart instead and remembers, so it "
+         "does not try again on that computer. To use the window there, ask IT to "
+         "approve the toolbox's viewer folder, then choose Chart window once.",
+         "The browser chart is written on every run beside the saved result, as "
+         "<table name>.html in swath_results. It needs no Python and no internet, "
+         "and can be sent to someone without ArcGIS: profile list, the swath "
+         "envelope with series toggles and side colours, the THi panel, a readout "
+         "on hover, a cross-section where you click, zoom, and PNG or SVG export."],
+        ["Automatic - the chart window, or the browser chart on a computer where "
+         "the window cannot run (default).",
+         "Chart window - always try the window, for example after IT has approved "
+         "it; still falls back to the browser chart.",
+         "Browser page - open the browser chart and never start the window.",
+         "Off - show nothing; the browser chart is still written."]),
     "geo_transform": (
         "Datum transformation between the baseline and raster coordinate systems.",
         ["Choose one whenever the list offers any. Without a transformation, arcpy "

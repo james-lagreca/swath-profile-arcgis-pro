@@ -13,8 +13,10 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import unittest
 from importlib.machinery import SourceFileLoader
+from unittest import mock
 
 import numpy as np
 
@@ -23,7 +25,7 @@ sys.path.insert(0, ROOT)
 
 import arcpy  # noqa: E402
 
-from swathprofile import plotting                      # noqa: E402
+from swathprofile import chartwindow, plotting         # noqa: E402
 from swathprofile.errors import SwathError              # noqa: E402
 from swathprofile.messaging import CollectingMessenger  # noqa: E402
 
@@ -63,7 +65,7 @@ class ToolEndToEndTest(unittest.TestCase):
         pr["in_rasters"].values = [self.raster]
         pr["swath_width"].value = "300 Meters"
         pr["step"].value = "15 Meters"
-        pr["open_viewer"].value = False
+        pr["open_viewer"].value = "Off"
         pr["bundle_path"].value = os.path.join(self.folder, "live.swath.npz")
         return tool, params, pr
 
@@ -132,6 +134,15 @@ class ToolEndToEndTest(unittest.TestCase):
                          [f"swath_t00{i}_p0.png" for i in range(1, 6)])
         self.assertTrue(os.path.exists(pr["bundle_path"].valueAsText))
         self.assertTrue(any("5 transect(s) generated" in m for m in msg.infos))
+        # The browser chart is written beside the permanent result copy on every
+        # run, whatever Show Interactive Chart says, and holds all five transects.
+        page = os.path.join(self.folder, "swath_results", "out_table.html")
+        self.assertTrue(os.path.exists(page))
+        with open(page, encoding="utf-8") as fh:
+            text = fh.read()
+        for name in ("T001", "T005"):
+            self.assertIn(f'"name":"{name}"', text)
+        self.assertTrue(any("Browser chart ->" in m for m in msg.infos))
 
         # On a plane every transect gives HI = 0.5 (centre column of the table).
         hi = [r[0] for r in arcpy.da.SearchCursor(
@@ -375,6 +386,73 @@ class ToolEndToEndTest(unittest.TestCase):
             self.assertAlmostEqual(width, 120.0)
             self.assertAlmostEqual(kept, 50.0, places=3)
             self.assertIn('"mask_mode": "keep"', params_json)
+
+
+class ChartDisplayWiringTest(unittest.TestCase):
+    """The tool's side of Show Interactive Chart.  The decisions themselves are
+    in swathprofile.chartwindow and tested in CI (tests/test_chartwindow.py)."""
+
+    @classmethod
+    def setUpClass(cls):
+        module = SourceFileLoader("swpyt_display", os.path.join(ROOT, "SwathProfile.pyt")
+                                  ).load_module()
+        cls.tool_cls = module.SwathProfileTool
+        cls.mod = sys.modules[module.SwathProfileTool.__module__]
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="swathwire_")
+        self.env = mock.patch.dict(os.environ, {chartwindow.STATE_DIR_ENV: self.tmp})
+        self.env.start()
+        chartwindow.SESSION.clear()
+
+    def tearDown(self):
+        chartwindow.SESSION.clear()
+        self.env.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _params(self):
+        tool = self.tool_cls()
+        params = tool.getParameterInfo()
+        return tool, params, {p.name: p for p in params}
+
+    def test_the_default_is_automatic(self):
+        _, _, pr = self._params()
+        self.assertEqual(pr["open_viewer"].value, "Automatic")
+        self.assertEqual(list(pr["open_viewer"].filter.list),
+                         ["Automatic", "Chart window", "Browser page", "Off"])
+
+    def test_old_true_and_false_become_choices_before_validation(self):
+        for given, want in ((False, "Off"), ("false", "Off"), (True, "Automatic"),
+                            ("TRUE", "Automatic"), ("browser page", "Browser page")):
+            tool, params, pr = self._params()
+            pr["open_viewer"].value = given
+            tool.updateParameters(params)
+            self.assertEqual(pr["open_viewer"].valueAsText, want, given)
+
+    def test_choosing_the_window_warns_where_it_is_known_not_to_start(self):
+        chartwindow.remember("failed", "denied", persist=True)
+        chartwindow.SESSION.clear()
+        tool, params, pr = self._params()
+        pr["open_viewer"].value = "Chart window"
+        tool.updateParameters(params)
+        tool.updateMessages(params)
+        self.assertTrue(pr["open_viewer"].hasWarning())
+        self.assertIn("could not start on this computer", pr["open_viewer"].message)
+        tool, params, pr = self._params()
+        tool.updateParameters(params)
+        tool.updateMessages(params)
+        self.assertFalse(pr["open_viewer"].hasWarning())      # Automatic: no warning
+
+    def test_the_tool_hands_its_viewer_and_python_to_chartwindow(self):
+        with mock.patch.object(chartwindow, "show_chart", return_value="page") as show:
+            self.tool_cls._show_chart("Browser page", "b.swath.npz", "p.html",
+                                      CollectingMessenger())
+        kwargs = show.call_args.kwargs
+        self.assertEqual(show.call_args.args, ("Browser page",))
+        self.assertEqual(kwargs["viewer"], self.mod.VIEWER_SCRIPT)
+        self.assertEqual(kwargs["root"], self.mod.ROOT)
+        self.assertIs(kwargs["find_python"], self.mod._python_for_viewer)
+        self.assertEqual((kwargs["bundle"], kwargs["page"]), ("b.swath.npz", "p.html"))
 
 
 if __name__ == "__main__":
