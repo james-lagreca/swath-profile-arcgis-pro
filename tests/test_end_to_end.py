@@ -50,7 +50,7 @@ class EndToEndTest(unittest.TestCase):
 
     # -- helpers --------------------------------------------------------------
 
-    def _run(self, line_fc=None, rasters=None, **kw):
+    def _run(self, line_fc=None, rasters=None, mask=None, **kw):
         cfg = SwathConfig(**dict(
             dict(swath_width=1000.0, step=15.0, n_lines=51,
                  tool_version="test"), **kw))
@@ -59,7 +59,7 @@ class EndToEndTest(unittest.TestCase):
         pairs = [(arcpy.Raster(r), rio.raster_info(r)) for r in ras_list]
         bl = features.read_baselines(line_fc or self.line_fc, self.sr,
                                      cfg.multipart, msg)
-        return run_swath(bl, pairs, cfg, self.sr, msg), msg
+        return run_swath(bl, pairs, cfg, self.sr, msg, mask=mask), msg
 
     # -- the analytic anchor --------------------------------------------------
 
@@ -540,6 +540,150 @@ class EndToEndTest(unittest.TestCase):
         np.testing.assert_allclose(m.z_mean, l.z_mean)      # unchanged
         self.assertTrue(np.isnan(m.hi).all())               # undefined
         np.testing.assert_allclose(l.hi, 0.0)               # reference's 0
+
+    # -- sampling mask --------------------------------------------------------
+
+    EAST = (LX + 3.0, Y0 - 100.0, LX + 700.0, Y0 + 3100.0)   # east of the line
+
+    def _mask_fc(self, name, wkts, epsg=synth.NZTM):
+        return synth.write_polygons(wkts, self.gdb, name, epsg=epsg)
+
+    def test_read_mask_honours_a_layer_selection(self):
+        fc = self._mask_fc("mask_sel", [synth.rect_wkt(*self.EAST),
+                                        synth.rect_wkt(X0, Y0, X0 + 100, Y0 + 100)])
+        layer = arcpy.management.MakeFeatureLayer(fc, "mask_sel_lyr")[0]
+        try:
+            arcpy.management.SelectLayerByAttribute(layer, "NEW_SELECTION",
+                                                    "OBJECTID = 1")
+            msg = CollectingMessenger()
+            mi = features.read_mask(layer, None, self.sr, "keep", messenger=msg)
+            self.assertEqual(mi.n_layer, 1)
+            self.assertTrue(any("selection active" in m for m in msg.infos))
+            self.assertIn("keep only inside 1 polygon(s)", mi.description)
+            self.assertAlmostEqual(mi.geometry.area, 697.0 * 3200.0, places=3)
+        finally:
+            arcpy.management.Delete(layer)
+
+    def test_read_mask_from_a_dialog_sketch(self):
+        fs = arcpy.FeatureSet()
+        fs.load(self._mask_fc("mask_fs", [synth.rect_wkt(*self.EAST)]))
+        mi = features.read_mask(None, fs, self.sr, "exclude")
+        self.assertEqual((mi.n_layer, mi.n_sketch, mi.mode), (0, 1, "exclude"))
+        self.assertEqual(mi.sample_mask.mode, "exclude")
+        empty = arcpy.FeatureSet()
+        empty.load(self._mask_fc("mask_fs_empty", []))
+        msg = CollectingMessenger()
+        self.assertIsNone(features.read_mask(None, empty, self.sr, messenger=msg))
+        self.assertTrue(any("no finished polygon" in w for w in msg.warnings))
+
+    def test_overlaps_are_unioned_and_holes_honoured(self):
+        x, y = LX, Y0 + 1000.0
+        fc = self._mask_fc("mask_ovl", [
+            synth.rect_wkt(x, y, x + 200, y + 200),
+            synth.rect_wkt(x + 100, y + 100, x + 300, y + 300),
+            f"POLYGON(({x} {y + 400},{x + 400} {y + 400},{x + 400} {y + 700},"
+            f"{x} {y + 700},{x} {y + 400}),({x + 100} {y + 500},{x + 100} {y + 600},"
+            f"{x + 250} {y + 600},{x + 250} {y + 500},{x + 100} {y + 500}))"])
+        mi = features.read_mask(fc, None, self.sr)
+        sm = mi.sample_mask
+        px = np.array([x + 150, x + 50, x + 250, x + 175, x + 50, x + 500])
+        py = np.array([y + 150, y + 50, y + 250, y + 550, y + 450, y + 150])
+        # The overlap of the two squares is inside, not cancelled; the hole is out.
+        self.assertEqual(sm.inside(px, py).tolist(),
+                         [True, True, True, False, True, False])
+
+    def test_numpy_mask_agrees_with_arcpy_on_random_points(self):
+        x, y = LX, Y0 + 1000.0
+        multipart = (f"MULTIPOLYGON((({x} {y},{x + 300} {y},{x + 150} {y + 280},"
+                     f"{x} {y})),(({x + 400} {y},{x + 700} {y + 50},{x + 600} {y + 400},"
+                     f"{x + 400} {y})))")
+        holed = (f"POLYGON(({x} {y + 500},{x + 600} {y + 500},{x + 600} {y + 900},"
+                 f"{x} {y + 900},{x} {y + 500}),({x + 200} {y + 600},{x + 250} {y + 800},"
+                 f"{x + 400} {y + 650},{x + 200} {y + 600}))")
+        bowtie = (f"POLYGON(({x + 800} {y},{x + 1000} {y + 200},{x + 1000} {y},"
+                  f"{x + 800} {y + 200},{x + 800} {y}))")
+        mi = features.read_mask(self._mask_fc("mask_rand", [multipart, holed, bowtie]),
+                                None, self.sr)
+        rng = np.random.default_rng(4)
+        px = rng.uniform(x - 50, x + 1050, 3000)
+        py = rng.uniform(y - 50, y + 950, 3000)
+        ours = mi.sample_mask.inside(px, py)
+        theirs = np.array([mi.geometry.contains(arcpy.PointGeometry(arcpy.Point(a, b),
+                                                                    self.sr))
+                           for a, b in zip(px, py)])
+        np.testing.assert_array_equal(ours, theirs)
+
+    def test_a_geographic_mask_keeps_the_same_samples(self):
+        nztm = arcpy.SpatialReference(synth.NZTM)
+        wgs = arcpy.SpatialReference(synth.WGS84)
+        x0, y0, x1, y1 = self.EAST
+        corners = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+        ll = features.transform_points(corners, nztm, wgs)
+        wkt = "POLYGON((" + ",".join(f"{a:.10f} {b:.10f}" for a, b in
+                                     list(ll) + [ll[0]]) + "))"
+        geo = features.read_mask(self._mask_fc("mask_wgs", [wkt], epsg=synth.WGS84),
+                                 None, self.sr)
+        local = features.read_mask(self._mask_fc("mask_nztm", [synth.rect_wkt(*self.EAST)]),
+                                   None, self.sr)
+        r_geo, _ = self._run(mask=geo.sample_mask)
+        r_loc, _ = self._run(mask=local.sample_mask)
+        np.testing.assert_array_equal(next(iter(r_geo.stats.values())).n_valid,
+                                      next(iter(r_loc.stats.values())).n_valid)
+        self.assertEqual(int(next(iter(r_loc.stats.values())).n_valid[10]), 25)
+
+    def test_a_mask_layer_with_nothing_usable_raises(self):
+        with self.assertRaises(GeometryError):
+            features.read_mask(self._mask_fc("mask_none", []), None, self.sr)
+
+    def test_mask_coverage_of_a_band(self):
+        ring = np.array([[LX - 500, Y0 + 500], [LX + 500, Y0 + 500],
+                         [LX + 500, Y0 + 2500], [LX - 500, Y0 + 2500],
+                         [LX - 500, Y0 + 500]])
+        half = synth.rect_wkt(LX, Y0 - 100, LX + 700, Y0 + 3100)
+        for mode, expect in (("keep", 50.0), ("exclude", 50.0)):
+            mi = features.read_mask(self._mask_fc(f"cov_{mode}", [half]), None,
+                                    self.sr, mode)
+            pct, shape = features.mask_coverage(ring, self.sr, mi)
+            self.assertAlmostEqual(pct, expect, places=6)
+            self.assertAlmostEqual(shape.area, 1000.0 * 1000.0, places=3)
+        far = features.read_mask(self._mask_fc("cov_far", [synth.rect_wkt(
+            X0, Y0, X0 + 50, Y0 + 50)]), None, self.sr, "keep")
+        self.assertEqual(features.mask_coverage(ring, self.sr, far), (0.0, None))
+        whole = features.read_mask(self._mask_fc("cov_all", [synth.rect_wkt(
+            X0, Y0, X0 + 4000, Y0 + 3000)]), None, self.sr, "keep")
+        pct, shape = features.mask_coverage(ring, self.sr, whole)
+        self.assertEqual(pct, 100.0)
+        self.assertAlmostEqual(shape.area, 1000.0 * 2000.0, places=3)
+
+    def test_zonal_mask_on_a_geographic_raster_partitions_the_cells(self):
+        """The cell mask is densified and moved into the raster's lat/lon grid."""
+        nztm = arcpy.SpatialReference(synth.NZTM)
+        wgs = arcpy.SpatialReference(synth.WGS84)
+        lon0, lat0, dd, n = 170.0, -44.05, 0.0001, 300
+        lons = lon0 + (np.arange(n) + 0.5) * dd
+        lats = (lat0 + n * dd) - (np.arange(n) + 0.5) * dd
+        xy = features.transform_points(np.stack(np.meshgrid(lons, lats), axis=-1),
+                                       wgs, nztm)
+        z = A * xy[..., 0] + B * xy[..., 1] + C
+        path = synth.write_raster(z, self.gdb, "geo_plane_mask", lon0, lat0, dd, dd,
+                                  epsg=synth.WGS84)
+        cx, cy = xy[n // 2, n // 2]
+        fc = synth.write_lines([[(cx - 400.0, cy - 500.0), (cx + 400.0, cy + 500.0)]],
+                               self.gdb, "geo_base_mask")
+        mask_fc = self._mask_fc("mask_geo", [synth.rect_wkt(cx - 2000, cy - 2000,
+                                                            cx + 60, cy + 2000)])
+        kw = dict(line_fc=fc, rasters=[path], swath_width=600.0, step=12.0,
+                  method="zonal")
+        s_all = next(iter(self._run(**kw)[0].stats.values()))
+        keep = features.read_mask(mask_fc, None, self.sr, "keep").sample_mask
+        excl = features.read_mask(mask_fc, None, self.sr, "exclude").sample_mask
+        r_k, msg = self._run(mask=keep, **kw)
+        s_k = next(iter(r_k.stats.values()))
+        s_e = next(iter(self._run(mask=excl, **kw)[0].stats.values()))
+        np.testing.assert_array_equal(s_k.n_valid + s_e.n_valid, s_all.n_valid)
+        self.assertGreater(int(s_k.n_valid.sum()), 0)
+        self.assertGreater(int(s_e.n_valid.sum()), 0)
+        self.assertTrue(any("Sampling mask placed in" in m for m in msg.infos))
 
 
 if __name__ == "__main__":

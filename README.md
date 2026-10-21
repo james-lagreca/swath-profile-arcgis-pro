@@ -27,6 +27,8 @@ median, quartiles and chosen percentiles, local relief, hypsometric integral
 - Profile lines colourable by which side of the baseline they came from, in the
   chart and on the offset‑lines layer in the map, with the compass direction of
   each side named in the legend.
+- A sampling mask, drawn or from a polygon layer, to measure one surface only:
+  a fan without the bedrock beside it. The map outputs are cut to match.
 - Map outputs with a native chart linked to map selection; hover help on every
   parameter; a time estimate before you press Run.
 - Seventeen documented numerical fixes over the reference implementations, with
@@ -82,9 +84,34 @@ dataset in a geodatabase that has unsaved edits blocks until the edits are
 saved, which looks like the tool hanging at "Writing outputs". If a run would
 take more than a couple of minutes, the dialog says so before you press Run.
 
+### Measuring one surface only: the sampling mask
+
+A swath across an alluvial fan often clips the bedrock range front at one
+corner, and those cells drag the minimum, the relief and THi away from the
+fan. Under *Sampling mask*, draw a polygon round the fan, or pick a polygon
+layer of mapped units (a selection is honoured; drawn and layer polygons are
+merged). With *Exclude inside* you can instead draw round just the part to
+leave out.
+
+Samples and cells outside the mask count as missing, exactly like NoData:
+nothing outside ever enters a statistic or the smoothing. The swath band and
+the offset lines on the map are cut to what was actually sampled, the run
+reports how much of each band the mask kept (`MASK_KEPT` in the summary), and
+the chart window and saved charts say a mask was used. Stations at the edge of
+the mask can keep only a sliver of the band; raise *Minimum Valid Samples per
+Station* to leave those out. Masking changes the relief each station sees, so
+it changes HI and THi as well, which is the point of measuring one surface.
+
+The mask adds no geoprocessing calls, so it costs nothing in a slow project.
+The same result can be had without the tool by clipping the DEM first with
+*Clip Raster*, at the cost of writing a copy of the raster. An automatic mask
+by slope was deliberately not added: it would also remove the fault scarps you
+are measuring.
+
 ## What you get on the map
 
 - **Swath band** — the polygon actually sampled, drawn with a transparent fill.
+  With a sampling mask it is cut to the area the mask kept.
 - **Station points** — one point per station carrying every statistic as an
   attribute (prefixed by raster, e.g. `MEADOWS_MEAN`, `MEADOWS_THI`), with a
   **native line chart attached**. Because the chart sits on a feature layer,
@@ -206,13 +233,16 @@ never collide with a layer's OIDs.
 "C:\Program Files\ArcGIS\Pro\bin\Python\envs\arcgispro-py3\python.exe" -m pytest tests -q
 ```
 
-117 tests. Most assert against closed‑form answers on analytic surfaces — a
+165 tests. Most assert against closed‑form answers on analytic surfaces — a
 plane cross‑section has HI exactly 0.5 and THi exactly 50, bilinear
 interpolation is exact on a plane, detrending a plane profile gives exactly
 zero, transects on a circular trace are exactly radial — so a failure localises
 the bug rather than merely signalling one. `test_tool_e2e.py` drives the
 geoprocessing tool through its real parameter objects, transects included.
-`test_core.py` and `test_transforms.py` run without ArcGIS.
+`test_core.py`, `test_transforms.py` and `test_mask.py` run without ArcGIS
+and in CI; `test_mask.py` drives the whole engine on an in-memory raster
+(`tests/fake_raster.py`), which is how the sampling mask and the all-cells
+mode's block-size invariance are checked there.
 
 ### Trying transects in Pro
 
@@ -253,11 +283,12 @@ swathprofile/
   stats.py        statistics, percentiles, HI, THi, the defect fixes       [no arcpy]
   smoothing.py    NaN-safe Savitzky-Golay                                  [no arcpy]
   transforms.py   detrend, re-zero/flip, cross-section, measure            [no arcpy]
+  mask.py         sampling mask: point and cell tests, one crossing rule   [no arcpy]
   plotting.py     figure builder, overlay, presets                         [no arcpy]
   bundle.py       .swath.npz round trip (v2, reads v1)                     [no arcpy]
   config.py       run configuration + pre-run estimate                     [no arcpy]
   raster_io.py    window maths, NoData, tiling, env hygiene                [arcpy]
-  features.py     CRS, baselines, transects, station points, writers      [arcpy]
+  features.py     CRS, baselines, masks, transects, station points, writers [arcpy]
   zonal.py        all-cells statistics (cross-section sweep)
   outputs.py      tables, CSV, native chart                                [arcpy]
   engine.py       orchestration + progress                                 [arcpy]

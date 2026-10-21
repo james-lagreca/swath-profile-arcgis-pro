@@ -35,6 +35,8 @@ SIDES = {"Both sides": "both", "Left of trace": "left", "Right of trace": "right
 #: lines only: All-cells sampling keeps no per-line samples to colour.
 PROFILE_COLOUR_CHOICES = {"Single colour": "single", "Side of line": "side",
                           "Side + distance": "ramp"}
+#: Dialog wording -> sampling-mask mode.
+MASK_MODES = {"Keep only inside": "keep", "Exclude inside": "exclude"}
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIEWER_SCRIPT = os.path.join(ROOT, "viewer", "swath_viewer.py")
@@ -245,6 +247,24 @@ def _cell_size_metres(raster_value):
     return cell * 111_000.0            # degrees -> rough metres
 
 
+def _feature_count(feature_set, cap=1000):
+    """Features in a dialog sketch, counted with a cursor (never GetCount).
+
+    Only used on sketch record sets, which carry no selection a cursor could
+    clear; counting stops at *cap*, because only zero versus some matters.
+    """
+    try:
+        n = 0
+        with arcpy.da.SearchCursor(feature_set, ["OID@"]) as cur:
+            for _ in cur:
+                n += 1
+                if n >= cap:
+                    break
+        return n
+    except Exception:
+        return -1                           # unknown: say nothing
+
+
 def _total_length_metres(source, cap=2000):
     """Sum of feature lengths (honours selection), in metres; None if unknown.
 
@@ -451,6 +471,22 @@ class SwathProfileTool(object):
                    "GPLinearUnit", category=cat)
         tstart.value = "0 Meters"
 
+        # -- Sampling mask ----------------------------------------------------
+        cat = "Sampling mask"
+        # A polygon sketch, set up exactly like draw_lines and for the same
+        # reasons (see the comment there): no value, so no template is ever
+        # bound, and the geometry type asked for by the parameter's own filter.
+        mask_draw = p("mask_draw", "Draw Sampling Mask on Map",
+                      "GPFeatureRecordSetLayer", category=cat)
+        mask_draw.filter.list = ["Polygon"]
+        mask_layer = p("mask_layer", "...or Sampling Mask Layer", "GPFeatureLayer",
+                       category=cat)
+        mask_layer.filter.list = ["Polygon"]
+        mask_mode = p("mask_mode", "Mask Mode", "GPString", category=cat)
+        mask_mode.filter.type = "ValueList"
+        mask_mode.filter.list = list(MASK_MODES.keys())
+        mask_mode.value = "Keep only inside"
+
         # -- Sampling ---------------------------------------------------------
         method = p("method", "Sampling Method", "GPString", "Required",
                    category="Sampling")
@@ -584,6 +620,7 @@ class SwathProfileTool(object):
 
         return [draw, lines, label_field, rasters, width, table,
                 tsrc, tspacing, tlength, twidth, tside, tstart,
+                mask_draw, mask_layer, mask_mode,
                 method, nlines, step, interp, zfac, multipart, tsmooth, fold,
                 smooth, plo, phi, thi_src, legacy, flathi, minvalid,
                 band, stations, transects, offs, prof3d, summary, csv_dir,
@@ -658,6 +695,9 @@ class SwathProfileTool(object):
                      "transect_side", "transect_start", "out_transects"):
             pr[name].enabled = has_trace
 
+        pr["mask_mode"].enabled = (pr["mask_draw"].value is not None or
+                                   pr["mask_layer"].value is not None)
+
         fmts = set(pr["chart_formats"].values or [])
         pr["out_chart_folder"].enabled = bool(fmts & {"PNG", "PDF", "SVG"})
         pr["chart_preset"].enabled = bool(fmts & {"PNG", "PDF", "SVG"})
@@ -688,6 +728,25 @@ class SwathProfileTool(object):
                     f"The sketch is {shape_type}, not a line. Click the sketch "
                     "button beside this parameter and choose the line tool, or "
                     "use the Baseline Layer parameter instead.")
+
+        # The mask sketch gets the same check for polygons, and a nudge while it
+        # is still empty: an unfinished sketch is ignored, so without the nudge
+        # a run would quietly go ahead unmasked.
+        mask_sketch = pr["mask_draw"].value
+        if mask_sketch is not None:
+            try:
+                shape_type = getattr(arcpy.Describe(mask_sketch), "shapeType", "")
+            except Exception:
+                shape_type = ""
+            if shape_type and shape_type != "Polygon":
+                pr["mask_draw"].setErrorMessage(
+                    f"The sketch is {shape_type}, not a polygon. Click the sketch "
+                    "button beside this parameter and choose the polygon tool, or "
+                    "use the Sampling Mask Layer parameter instead.")
+            elif shape_type == "Polygon" and _feature_count(mask_sketch) == 0:
+                pr["mask_draw"].setWarningMessage(
+                    "No polygon has been finished yet: double-click to close it. "
+                    "An empty sketch is ignored and the run is not masked.")
 
         for value in rasters:
             try:
@@ -1002,21 +1061,60 @@ class SwathProfileTool(object):
         base_bl = [b for b in baselines if b.oid not in transect_ids]
         tr_bl = [b for b in baselines if b.oid in transect_ids]
         tw = _linear_units(pr["transect_width"], working_sr, None) if has_trace else None
+        import dataclasses
         tr_cfg = cfg
         if tr_bl and tw and float(tw) > 0 and abs(float(tw) - cfg.swath_width) > 1e-9:
-            import dataclasses
             tr_cfg = dataclasses.replace(cfg, swath_width=float(tw))
             msg.info(f"  Transects use a swath width of {float(tw):g} "
                      f"(baselines {cfg.swath_width:g}).")
 
+        # Sampling mask: read once in the working CRS, like the baselines, and
+        # clipped to the padded extent every swath can reach.
+        mask_input = None
+        mask_sketch, mask_layer = pr["mask_draw"].value, pr["mask_layer"].value
+        if mask_sketch is not None or mask_layer is not None:
+            mode = MASK_MODES.get(pr["mask_mode"].valueAsText, "keep")
+            half = max(cfg.half_width, float(tr_cfg.half_width))
+            pad = half + 5.0 * cfg.step
+            allv = np.concatenate([b.vertices for b in baselines])
+            box = (float(allv[:, 0].min()) - pad, float(allv[:, 1].min()) - pad,
+                   float(allv[:, 0].max()) + pad, float(allv[:, 1].max()) + pad)
+            mask_input = features.read_mask(
+                mask_layer, mask_sketch, working_sr, mode,
+                fallback_sr=map_sr if map_sr is not None else _active_map_sr,
+                clip_box=box, densify_step=cfg.step, messenger=msg)
+        if mask_input is not None and mask_input.is_empty:
+            if mask_input.mode == "keep":
+                raise SwathError(
+                    "The sampling mask does not overlap any swath, so with 'Keep only "
+                    "inside' nothing would be sampled. Move or redraw the mask, or "
+                    "switch the Mask Mode to 'Exclude inside'.")
+            msg.warn("The sampling mask does not overlap any swath, so nothing is "
+                     "excluded.")
+            mask_input = None
+        if mask_input is not None:
+            cfg = dataclasses.replace(cfg, mask_mode=mask_input.mode,
+                                      mask_note=mask_input.description)
+            tr_cfg = dataclasses.replace(tr_cfg, mask_mode=mask_input.mode,
+                                         mask_note=mask_input.description)
+            msg.info(f"Sampling mask: {mask_input.description}.")
+            if cfg.min_valid <= 1:
+                msg.info("  Stations at the edge of the mask may keep only a few "
+                         "samples. Raise 'Minimum Valid Samples per Station' to leave "
+                         "such slivers out of the statistics.")
+        sample_mask = mask_input.sample_mask if mask_input is not None else None
+
         result = None
         if base_bl:
-            result = run_swath(base_bl, rasters, cfg, working_sr, msg)
+            result = run_swath(base_bl, rasters, cfg, working_sr, msg, mask=sample_mask)
         if tr_bl:
-            tr_result = run_swath(tr_bl, rasters, tr_cfg, working_sr, msg)
+            tr_result = run_swath(tr_bl, rasters, tr_cfg, working_sr, msg,
+                                  mask=sample_mask)
             result = tr_result if result is None else result.merge(tr_result)
         arcpy.ResetProgressor()
         result.elapsed = time.perf_counter() - t_start
+        if mask_input is not None:
+            self._mask_coverage(result, mask_input, working_sr, msg)
 
         # Point the geoprocessing environment at the (small) output geodatabase
         # while writing, not at the project's own: the few remaining
@@ -1033,7 +1131,7 @@ class SwathProfileTool(object):
                 arcpy.env.workspace = out_gdb
                 arcpy.env.scratchWorkspace = out_gdb
             self._write_outputs(pr, result, working_sr, cfg, transect_records, msg,
-                                t_start)
+                                t_start, mask_input=mask_input)
         finally:
             for k, v in saved_env.items():
                 try:
@@ -1051,7 +1149,54 @@ class SwathProfileTool(object):
         ws, name = os.path.split(path)
         return arcpy.CreateUniqueName(name, ws)
 
-    def _write_outputs(self, pr, result, sr, cfg, transect_records, msg, t_start):
+    @staticmethod
+    def _has_data(result, oid, part_id) -> bool:
+        """Whether any raster has a single valid sample for this part."""
+        return any(int(np.sum(s.n_valid)) > 0
+                   for s in result.for_part(oid, part_id).values())
+
+    def _mask_coverage(self, result, mask_input, sr, msg):
+        """Record how much of each band the mask keeps, and the clipped band.
+
+        Sets ``mask_kept`` (percent of the band's area) and ``band_shape`` (the
+        kept piece, or None) on every part's geometry record, reports the
+        coverage - one line per profile, or a range when there are many - and
+        stops the run if the mask has left nothing anywhere to report.
+        """
+        rows = []
+        for oid, part_id in result.parts():
+            g = result.geometry[(oid, part_id)]
+            pct, shape = features.mask_coverage(g["ring"], sr, mask_input)
+            g["mask_kept"], g["band_shape"] = pct, shape
+            rows.append(((oid, part_id), pct))
+
+        if not any(self._has_data(result, *key) for key, _ in rows):
+            raise SwathError(
+                "The sampling mask leaves no valid samples in any swath. With 'Keep "
+                "only inside' the polygons must overlap the swath band; with "
+                "'Exclude inside' they must not cover all of it.")
+
+        def label(key):
+            return result.names.get(key) or f"OID {key[0]} part {key[1]}"
+
+        if len(rows) <= 5:
+            for key, pct in rows:
+                msg.info(f"  Sampling mask keeps {pct:.0f}% of the swath band of "
+                         f"{label(key)}.")
+        else:
+            vals = np.array([pct for _, pct in rows])
+            msg.info(f"  Sampling mask keeps {vals.min():.0f}-{vals.max():.0f}% of each "
+                     f"swath band (median {np.median(vals):.0f}%) across {len(rows)} "
+                     "profiles.")
+        gone = [label(key) for key, _ in rows if not self._has_data(result, *key)]
+        if gone:
+            shown = ", ".join(gone[:10]) + (", ..." if len(gone) > 10 else "")
+            msg.warn(f"  The sampling mask removes all of {len(gone)} profile(s): {shown}. "
+                     "They stay in the tables with Null statistics but are left out "
+                     "of the band, offset-line and 3D layers and the saved charts.")
+
+    def _write_outputs(self, pr, result, sr, cfg, transect_records, msg, t_start,
+                       mask_input=None):
         def tick(text):
             msg.info(f"{text}  [{time.perf_counter() - t_start:.1f} s]")
 
@@ -1106,19 +1251,27 @@ class SwathProfileTool(object):
             rings = []
             for oid, part_id in result.parts():
                 g = result.geometry[(oid, part_id)]
-                rings.append({"ring": g["ring"], "oid": oid, "part_id": part_id,
-                              "name": result.names.get((oid, part_id), ""),
-                              "width": float(g.get("width", cfg.swath_width)),
-                              "step": g["step_actual"],
-                              "n_lines": int(g.get("n_lines",
-                                                   cfg.n_lines if cfg.is_offset else 0)),
-                              "n_stations": len(g["distances"]),
-                              "method": g.get("method", cfg.method)})
-            path = self._unique(pr["out_band"].valueAsText)
-            features.write_band_polygons(path, rings, sr, msg)
-            pr["out_band"].value = path
-            self._attach_layer_file(pr["out_band"], path, lyrx_dir, "band", msg)
-            tick("  band polygons written")
+                rec = {"ring": g["ring"], "oid": oid, "part_id": part_id,
+                       "name": result.names.get((oid, part_id), ""),
+                       "width": float(g.get("width", cfg.swath_width)),
+                       "step": g["step_actual"],
+                       "n_lines": int(g.get("n_lines",
+                                            cfg.n_lines if cfg.is_offset else 0)),
+                       "n_stations": len(g["distances"]),
+                       "method": g.get("method", cfg.method)}
+                if mask_input is not None:
+                    # The band as sampled: clipped to the mask, or left out
+                    # when the mask keeps none of it.
+                    if g.get("band_shape") is None:
+                        continue
+                    rec["shape"] = g["band_shape"]
+                rings.append(rec)
+            if rings:
+                path = self._unique(pr["out_band"].valueAsText)
+                features.write_band_polygons(path, rings, sr, msg)
+                pr["out_band"].value = path
+                self._attach_layer_file(pr["out_band"], path, lyrx_dir, "band", msg)
+                tick("  band polygons written")
 
         if transect_records and pr["out_transects"].valueAsText:
             path = self._unique(pr["out_transects"].valueAsText)
@@ -1141,22 +1294,39 @@ class SwathProfileTool(object):
             for oid, part_id in result.parts():
                 g = result.geometry[(oid, part_id)]
                 any_stats = next(iter(result.for_part(oid, part_id).values()))
+                masked = g.get("masked")
                 for i, off in enumerate(g["offsets"]):
-                    lines.append({
-                        "xy": g["points"][i], "oid": oid, "part_id": part_id,
-                        "name": result.names.get((oid, part_id), ""),
-                        "index": i, "offset": float(off),
-                        "n_valid": int(np.sum(np.isfinite(any_stats.values[i])))
-                        if any_stats.values is not None else 0})
-            path = self._unique(pr["out_offset_lines"].valueAsText)
-            features.write_offset_lines(path, lines, sr, msg)
-            pr["out_offset_lines"].value = path
-            self._attach_layer_file(pr["out_offset_lines"], path, lyrx_dir,
-                                    "offsets", msg)
+                    rec = {"xy": g["points"][i], "oid": oid, "part_id": part_id,
+                           "name": result.names.get((oid, part_id), ""),
+                           "index": i, "offset": float(off),
+                           "n_valid": int(np.sum(np.isfinite(any_stats.values[i])))
+                           if any_stats.values is not None else 0}
+                    # With a mask, decide per line from the samples it kept:
+                    # untouched lines are written as they are, lines the mask
+                    # removed entirely are left out, and only lines it cut
+                    # partway pay for a geometry clip.
+                    if mask_input is not None and masked is not None:
+                        row = masked[i]
+                        if row.all():
+                            continue
+                        if row.any():
+                            rec["shape"] = features.clip_line(g["points"][i], sr,
+                                                              mask_input)
+                            if rec["shape"] is None:
+                                continue
+                    lines.append(rec)
+            if lines:
+                path = self._unique(pr["out_offset_lines"].valueAsText)
+                features.write_offset_lines(path, lines, sr, msg)
+                pr["out_offset_lines"].value = path
+                self._attach_layer_file(pr["out_offset_lines"], path, lyrx_dir,
+                                        "offsets", msg)
 
         if pr["out_profiles_3d"].valueAsText and cfg.is_offset:
             profiles = []
             for oid, part_id in result.parts():
+                if mask_input is not None and not self._has_data(result, oid, part_id):
+                    continue
                 g = result.geometry[(oid, part_id)]
                 for rname, s in result.for_part(oid, part_id).items():
                     for series, arr in (("MIN", s.z_min), ("MEAN", s.z_mean),
@@ -1236,19 +1406,43 @@ class SwathProfileTool(object):
 
     # -- charts, bundle, viewer -----------------------------------------------
 
+    @staticmethod
+    def _chart_footer(cfg, g=None):
+        """Provenance line for a saved chart, using the part's own settings.
+
+        Transects can run at their own width, so the width and line count come
+        from the part where possible; the sampling mask is named when one was
+        used, with the share of the band it kept.
+        """
+        g = g or {}
+        width = float(g.get("width") or cfg.swath_width)
+        n_lines = int(g.get("n_lines") or (cfg.n_lines if cfg.is_offset else 0))
+        lines = f"{n_lines} profiles | " if n_lines else ""
+        mask = ""
+        if cfg.mask_mode:
+            verb = "keep inside" if cfg.mask_mode == "keep" else "exclude inside"
+            kept = g.get("mask_kept")
+            mask = f"mask: {verb}" + (f" ({kept:.0f}% of band) | " if kept is not None
+                                      else " | ")
+        return (f"swath width {width:g} | step {cfg.step:g} | {lines}"
+                f"{g.get('method') or cfg.method} | {mask}SwathProfile {cfg.tool_version}")
+
     def _write_charts(self, folder, result, cfg, formats, preset, msg,
                       profile_colour="single"):
         plotting.use_agg()
         os.makedirs(folder, exist_ok=True)
-        footer = (f"swath width {cfg.swath_width:g} | step {cfg.step:g} | "
-                  f"{cfg.n_lines} profiles | {cfg.method} | "
-                  f"SwathProfile {cfg.tool_version}")
-        for oid, part_id in result.parts():
+        footer = self._chart_footer(cfg)
+        # A part with no valid sample in any raster (the mask removed it, or it
+        # lies off the rasters) would only give an empty chart.
+        parts = [k for k in result.parts() if self._has_data(result, *k)]
+        for oid, part_id in parts:
             name = result.names.get((oid, part_id), "") or f"OID {oid} part {part_id}"
             fig, _ = plotting.build_figure(
                 result.for_part(oid, part_id), title=f"Swath profile - {name}",
-                thi_raster=result.thi_raster, footer=footer, preset=preset,
-                pct=(cfg.pct_low, cfg.pct_high), profile_colour=profile_colour)
+                thi_raster=result.thi_raster,
+                footer=self._chart_footer(cfg, result.geometry.get((oid, part_id))),
+                preset=preset, pct=(cfg.pct_low, cfg.pct_high),
+                profile_colour=profile_colour)
             stem = outputs.safe_prefix(name, 32).lower()
             for ext in sorted(formats):
                 path = os.path.join(folder, f"swath_{stem}_p{part_id}.{ext.lower()}")
@@ -1256,7 +1450,6 @@ class SwathProfileTool(object):
                 msg.info(f"  Chart -> {path}")
 
         # Several profiles (transects along a trace): also a stacked figure.
-        parts = result.parts()
         if len(parts) > 1:
             entries = []
             for oid, part_id in parts:

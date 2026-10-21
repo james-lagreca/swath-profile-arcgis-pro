@@ -88,3 +88,23 @@ def write_lines(list_of_vertices, gdb, name, epsg=NZTM):
             arr = arcpy.Array([arcpy.Point(float(x), float(y)) for x, y in verts])
             cur.insertRow([arcpy.Polyline(arr, sr)])
     return fc
+
+
+def rect_wkt(x0, y0, x1, y1):
+    """WKT of an axis-aligned rectangle."""
+    return f"POLYGON(({x0} {y0},{x1} {y0},{x1} {y1},{x0} {y1},{x0} {y0}))"
+
+
+def write_polygons(wkts, gdb, name, epsg=NZTM):
+    """Save polygons given as WKT into one feature class.
+
+    WKT is used because it states holes and multiple parts unambiguously:
+    ``POLYGON((outer),(hole))`` and ``MULTIPOLYGON(((a)),((b)))``.
+    """
+    sr = arcpy.SpatialReference(epsg)
+    fc = arcpy.management.CreateFeatureclass(
+        gdb, name, "POLYGON", spatial_reference=sr)[0]
+    with arcpy.da.InsertCursor(fc, ["SHAPE@"]) as cur:
+        for wkt in wkts:
+            cur.insertRow([arcpy.FromWKT(wkt, sr)])
+    return fc

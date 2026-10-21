@@ -77,6 +77,13 @@ class SwathConfig:
     # coordinate systems
     geo_transform: str = ""
 
+    # sampling mask - provenance only.  The polygons themselves travel to the
+    # engine as a SampleMask (run_swath's ``mask`` argument), never in here:
+    # this object is written whole into the summary's PARAMS field and the
+    # bundle, and geometry would bloat and truncate both.
+    mask_mode: str = ""                   # "" (none) | keep | exclude
+    mask_note: str = ""                   # short human description of the mask
+
     # bookkeeping
     label_field: str = ""
     thi_raster: str = ""
@@ -110,6 +117,11 @@ class SwathConfig:
             raise ConfigError(f"Unknown transect side {self.transect_side!r}.")
         if self.transect_spacing < 0 or self.transect_length < 0:
             raise ConfigError("Transect spacing and length must not be negative.")
+        if self.mask_mode not in ("", "keep", "exclude"):
+            raise ConfigError(f"Unknown sampling-mask mode {self.mask_mode!r}; expected "
+                              "'keep' or 'exclude'.")
+        # PARAMS is cut at 4000 characters; a long note would push the rest out.
+        self.mask_note = str(self.mask_note or "")[:200]
 
     @property
     def is_offset(self) -> bool:

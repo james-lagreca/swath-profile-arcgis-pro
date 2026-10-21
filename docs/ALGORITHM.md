@@ -90,6 +90,76 @@ Two independent disqualifying reasons, plus a licence cost:
    clipping would corrupt exactly the curved baselines that matter most.
 3. It requires Spatial Analyst. The numpy implementation requires no extension.
 
+## Sampling mask
+
+A mask restricts the swath to one surface: an alluvial fan without the bedrock
+a corner of the band runs onto, say. It is a set of polygons, drawn in the
+dialog and/or taken from a polygon layer, with a mode: *keep only inside* or
+*exclude inside*. Masked samples and cells are treated exactly as NoData, so
+the definitions above apply unchanged to whatever remains.
+
+**Reading.** Mask polygons are read like baselines — the layer's selection is
+noted before any cursor touches it, and the cursor projects into the working
+CRS with no datum transformation, so mask and baselines are always mutually
+consistent. All polygons are then **unioned** (overlapping polygons must merge;
+under the even‑odd rule below they would cancel) and clipped to the padded
+extent of every swath. That one topological operation also simplifies a
+self‑intersecting sketch, so the rings the engine tests are the rings of the
+geometry the outputs are clipped with, and it bounds the work on a detailed
+mapped polygon. True curves are densified first, because `getPart` reports only
+an arc's end points.
+
+**The rule.** One crossing rule, in `swathprofile/mask.py`, answers both "is
+this point inside" and "is this cell inside": cast a ray east; an edge counts
+when the point's *y* lies in its half‑open range `[y_low, y_high)` and the
+crossing is strictly east of the point; an odd count is inside. A point exactly
+on the boundary is therefore classified as if nudged east (and north at a
+vertex's height): polygons sharing an edge never both claim a point, and the
+answer does not depend on digitising direction. The point test and the cell
+scanline compute the crossing *x* with the same expression and compare it the
+same way, so a point at a cell centre gets the cell's answer bit for bit.
+There is no prefilter on the x‑range, because the crossing *x* can round one
+ulp beyond the vertices and a prefilter would then split a point from its cell.
+
+**Offset lines.** The mask decides once per baseline on the **sample
+positions** in the working CRS. Every stacked raster therefore sees exactly the
+same samples — a 0.5 m LiDAR DEM and a 30 m DEM in the same run are compared
+over the same sample set — and the offset lines on the map, cut to the mask,
+show exactly the positions kept. Masked samples become NaN before
+`compute_stats`, so neither the smoothing (`savgol_nan` interpolates across
+gaps from kept samples and restores the NaN afterwards) nor any statistic sees
+them. Interpolation can still reach beyond the boundary for a sample just
+inside it: up to about 1.4 cells with bilinear, 0.7 with nearest neighbour.
+That is far finer than any drawn boundary; for a strict cell‑level cut use
+*All cells*. Stretches of a profile, and whole profiles, the mask removes
+completely are not read at all.
+
+**All cells.** Each raster gets the mask in its own CRS — densified at the
+station spacing and transformed, so a straight edge in the working CRS keeps
+its true path in a lat/lon raster — and a cell whose centre the mask drops never
+becomes a candidate for the sweep. The assignment of the remaining cells is
+unchanged, because it depends only on the station positions. In keep mode a
+block the mask cannot reach is not read. *Minimum Valid Samples per Station*
+applies in this mode too, counting cells (it used to be ignored here).
+
+**What it changes.** `N_VALID` counts only what the mask kept; `PCT_NODATA`
+counts masked samples as missing, as it already does folded ones; `MASK_KEPT`
+in the summary is the share of the band's area the mask kept, computed from the
+same `intersect` and `difference` that cut the band, because the band's own
+area is ill‑defined where it folds. Masking changes each station's relief and
+the profile's maximum relief, so it changes HI and THi — which is the purpose:
+they then describe the chosen surface. A station at the mask edge may keep a
+sliver of the band whose statistics describe a much narrower swath; raise
+*Minimum Valid Samples* to leave such stations out.
+
+**Why not `arcpy.env.mask`.** `raster_io.env_guard` neutralises the
+environment mask on purpose, because a stale project setting silently changes
+results; and an environment mask applies to cells only, so it could not make
+every raster see the same sample positions. **Why not an automatic slope
+mask.** Bedrock is steep, but so are the fault scarps, terrace risers and
+channel banks a swath is usually drawn to measure; a slope threshold would
+delete the signal.
+
 ## Deviation: normal offsets, not `offsetCurve`
 
 arcpy has no offset‑curve operation, so offsets are constructed from unit
@@ -273,6 +343,8 @@ ordinary baselines: OIDs from 2 000 000, names `T001…`.
   process would need a CIM/IPC channel that does not exist for Python; that
   feature genuinely requires the .NET Pro SDK.
 * The band polygon self‑intersects where the swath folds. This is deliberate —
-  the map should show the region actually sampled, not a tidied buffer.
+  the map should show the region actually sampled, not a tidied buffer. A band
+  cut by a sampling mask has been through a topological operation and is
+  simplified there instead.
 * `arcpy.charts` cannot draw a filled envelope, so the native chart is a
   convenience only; matplotlib is the publication path.

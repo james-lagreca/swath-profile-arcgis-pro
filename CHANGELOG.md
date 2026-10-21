@@ -23,8 +23,37 @@
   - The line's own profile (offset zero) is drawn in the baseline's near-black
     rather than either side's colour, using the same centre test the statistics
     use, so the chart and `Z_CENTRE` always agree about which line that is.
+- **Sampling mask: measure one surface only.** A new *Sampling mask* group
+  takes a polygon drawn on the map and/or a polygon layer (a selection is
+  honoured; everything is merged), with *Keep only inside* (default) or
+  *Exclude inside*. Use it for an alluvial fan whose swath clips the bedrock
+  beside it.
+  - Masked samples and cells are treated exactly like NoData, so nothing outside
+    the mask enters any statistic or the smoothing, in either sampling mode and
+    for the baseline's own profile.
+  - Offset lines: decided on each sample's position, so every stacked raster sees
+    the same samples. All cells: a strict cut on each cell's centre, with the
+    mask moved into each raster's own coordinate system.
+  - The swath band and the offset lines on the map are cut to what was sampled.
+    The summary gains `MASK_KEPT` (percent of each band kept), and the chart
+    window and saved charts name the mask.
+  - Profiles, stretches and raster blocks the mask removes completely are not
+    read. No geoprocessing calls are added.
 
 ### Fixed
+- **All cells mode ignored *Minimum Valid Samples per Station*.** Only the
+  offset-lines path applied it. It now nulls stations with too few valid cells
+  in both modes, before relief, HI and THi are computed.
+- **All cells results could differ in the last decimal places with *Max Raster
+  Block*.** Cell centres were computed from each block's own corner, which on a
+  fractional grid (0.3 m LiDAR, say) rounds differently for about one cell in
+  five depending on how the read was tiled. They are now computed from the
+  raster's origin, like every other index calculation, and a test proves the
+  results are bitwise identical at any block size.
+- **The chart window's smoothing dropped the run's statistics settings.**
+  Choosing a smoothing preset re-computed the statistics without *Minimum Valid
+  Samples*, the flat-HI rule or the legacy switch, so stations the run had left
+  out reappeared. It now uses the run's settings.
 - **Drawing a baseline worked only every other time the tool was opened.** The
   sketch parameter was given a POLYLINE template created in the `memory`
   workspace. That workspace lives as long as the ArcGIS Pro process, so the
@@ -49,6 +78,13 @@
   `offsets`, because the cached `_swath_tmpl_offsets` in a results geodatabase
   written by 1.0.0 has no `SIDE` field. Existing geodatabases keep that one
   unused table; it can be deleted.
+- Parameter positions changed: *Colour Profile Lines By* and the three
+  *Sampling mask* parameters were inserted, so scripts that pass the tool's
+  parameters by position rather than by name need updating from *Sampling
+  Method* onward.
+- Saved charts state each profile's own swath width and line count in the
+  footer (transects can differ from the main baseline), and a profile with no
+  valid data in any raster no longer gets an empty chart.
 
 ## 1.0.0 — 2026-09-02
 

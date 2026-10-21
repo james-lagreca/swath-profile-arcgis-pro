@@ -16,7 +16,8 @@ from .errors import CrsError, GeometryError
 
 __all__ = ["Baseline", "require_spatial_reference", "same_crs", "choose_working_crs",
            "transform_points", "read_baselines", "read_featureset",
-           "transect_baselines", "selection_note", "write_band_polygons",
+           "transect_baselines", "selection_note", "MaskInput", "read_mask",
+           "mask_coverage", "clip_line", "write_band_polygons",
            "write_offset_lines", "write_profiles_3d", "write_transects",
            "write_station_points"]
 
@@ -237,7 +238,7 @@ def transect_baselines(trace_vertices, spacing, length, side="both", start=0.0,
     return baselines, records
 
 
-def selection_note(layer) -> str:
+def selection_note(layer, noun: str = "baseline feature(s)") -> str:
     """Describe how many features will be processed, and whether a selection is on.
 
     A ``GPFeatureLayer`` parameter carries the layer's selection set and
@@ -259,10 +260,10 @@ def selection_note(layer) -> str:
         fidset = ""
     n_sel = len([f for f in fidset.split(";") if f.strip()]) if fidset else 0
     if n_sel:
-        return f"Processing {n_sel} baseline feature(s) (selection active: {n_sel} selected)."
+        return f"Processing {n_sel} {noun} (selection active: {n_sel} selected)."
     with arcpy.da.SearchCursor(layer, ["OID@"]) as cur:
         total = sum(1 for _ in cur)
-    return f"Processing {total} baseline feature(s) (no selection - the whole layer)."
+    return f"Processing {total} {noun} (no selection - the whole layer)."
 
 
 def _part_to_array(part) -> np.ndarray:
@@ -344,6 +345,264 @@ def read_baselines(layer, spatial_reference, multipart: str = "each_part",
 
 
 # ---------------------------------------------------------------------------
+# Sampling mask
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MaskInput:
+    """The user's sampling mask, read and ready for the engine and the writers.
+
+    ``geometry`` is one arcpy Polygon in the working CRS: the union of every
+    usable polygon, clipped to the extent the swaths can reach.  It is what the
+    band and the offset lines are clipped with.  ``sample_mask`` holds the rings
+    of that same polygon for the numpy engine, so the map and the statistics
+    agree about what was kept.
+    """
+
+    geometry: object
+    sample_mask: object                  # swathprofile.mask.SampleMask
+    mode: str
+    n_layer: int = 0
+    n_sketch: int = 0
+    description: str = ""
+
+    @property
+    def is_empty(self) -> bool:
+        """Nothing of the mask lies where any swath can reach."""
+        return self.sample_mask.is_empty
+
+
+def _polygon_rings(poly):
+    """Every ring of an arcpy Polygon as (K, 2) arrays, exteriors and holes alike.
+
+    ``getPart(i)`` gives an exterior ring followed by its holes, each hole
+    preceded by a ``None`` point.  :func:`_part_to_array` drops those separators,
+    which would join every hole onto its exterior with a phantom edge; this
+    splits there instead.  The even-odd rule in :mod:`.mask` then needs no
+    telling which ring is a hole.
+    """
+    rings = []
+    for i in range(poly.partCount):
+        cur = []
+        for pt in poly.getPart(i):
+            if pt is None:
+                if len(cur) >= 3:
+                    rings.append(np.asarray(cur, dtype=np.float64))
+                cur = []
+            else:
+                cur.append((pt.X, pt.Y))
+        if len(cur) >= 3:
+            rings.append(np.asarray(cur, dtype=np.float64))
+    return rings
+
+
+def _union_all(geoms):
+    """Union by pairwise reduction: log-depth, rather than a growing running union."""
+    geoms = list(geoms)
+    while len(geoms) > 1:
+        merged = [geoms[i].union(geoms[i + 1]) for i in range(0, len(geoms) - 1, 2)]
+        if len(geoms) % 2:
+            merged.append(geoms[-1])
+        geoms = merged
+    return geoms[0] if geoms else None
+
+
+def _usable_polygon(shape, densify_step=None):
+    """The polygon, ready to union, or None when it has nothing in it.
+
+    True curves (arcs drawn with the sketch's curve tools) are densified first:
+    ``getPart`` reports only an arc's end points, so the rings would cut the
+    curve's corner.
+    """
+    if shape is None:
+        return None
+    try:
+        if shape.partCount == 0:
+            return None
+    except Exception:
+        return None
+    if densify_step and getattr(shape, "hasCurves", False):
+        step = float(densify_step)
+        shape = shape.densify("DISTANCE", step, step / 20.0)
+    return shape
+
+
+def _read_mask_sketch(feature_set, spatial_reference, fallback_sr, densify_step,
+                      messenger):
+    """Polygons sketched in the dialog, in *spatial_reference* (mirrors read_featureset)."""
+    import arcpy
+
+    try:
+        with arcpy.da.SearchCursor(feature_set, ["OID@"]) as cur:
+            n = sum(1 for _ in cur)
+    except Exception:
+        n = 0
+    if n == 0:
+        return []
+
+    d = arcpy.Describe(feature_set)
+    src_sr = getattr(d, "spatialReference", None)
+    if src_sr is None or not src_sr.name or src_sr.name == "Unknown":
+        src_sr = fallback_sr() if callable(fallback_sr) else fallback_sr
+        if src_sr is None:
+            raise CrsError(
+                "The sketched sampling mask has no coordinate system and the active "
+                "map's could not be determined. Draw it on a map with a defined "
+                "coordinate system.")
+        if messenger:
+            messenger.info(f"  Sketched mask assumed to be in {src_sr.name}.")
+
+    out = []
+    with arcpy.da.SearchCursor(feature_set, ["SHAPE@"]) as cur:
+        for (shape,) in cur:
+            if shape is None:
+                continue
+            if not same_crs(src_sr, spatial_reference):
+                if shape.spatialReference is None or \
+                        shape.spatialReference.name in ("", "Unknown"):
+                    shape = arcpy.Polygon(shape.getPart(), src_sr)
+                shape = shape.projectAs(spatial_reference)
+            g = _usable_polygon(shape, densify_step)
+            if g is not None:
+                out.append(g)
+    return out
+
+
+def read_mask(layer, sketch, spatial_reference, mode: str = "keep", *,
+              fallback_sr=None, clip_box=None, densify_step=None, messenger=None):
+    """Read the sampling mask from a polygon layer and/or a dialog sketch.
+
+    Returns a :class:`MaskInput` in *spatial_reference*, or None when only an
+    empty sketch was given (the run then proceeds unmasked, with a warning).
+    A layer that yields no polygon at all is an error: running unmasked when
+    the user asked for a mask would be a wrong answer, not a degraded one.
+
+    Polygons are read exactly the way baselines are - the layer's selection is
+    noted before any cursor touches it, and the cursor projects on the fly - so
+    mask and baselines are always mutually consistent.  Everything is then
+    unioned (overlapping polygons must merge, not cancel under even-odd) and
+    clipped to *clip_box* ``(x0, y0, x1, y1)``, the padded extent of every swath.
+    That one topological operation also simplifies a self-intersecting sketch,
+    so the rings the engine tests are those of the geometry the outputs are
+    clipped with, and it bounds the work on a detailed mapped polygon.
+
+    *fallback_sr* (an SR or a zero-argument callable) is used only when a
+    sketch reports no coordinate system, so the map is consulted only then.
+    """
+    import arcpy
+
+    from .mask import SampleMask
+
+    geoms, notes = [], []
+    n_layer = n_sketch = 0
+
+    if layer is not None:
+        d = arcpy.Describe(layer)
+        require_spatial_reference(d, "Sampling mask layer")
+        note = selection_note(layer, noun="mask polygon(s)")
+        if messenger:
+            messenger.info(f"  {note}")
+        with arcpy.da.SearchCursor(layer, ["OID@", "SHAPE@"],
+                                   spatial_reference=spatial_reference) as cur:
+            for oid, shape in cur:
+                g = _usable_polygon(shape, densify_step)
+                if g is None:
+                    if messenger:
+                        messenger.warn(f"  Mask polygon OID {oid} is empty; skipped.")
+                    continue
+                geoms.append(g)
+                n_layer += 1
+        if n_layer == 0:
+            raise GeometryError(
+                "The sampling mask layer has no polygons to use. Check its selection "
+                "and definition query, or clear the mask parameters.")
+        notes.append(f"{n_layer} from {getattr(d, 'name', '') or 'the layer'}")
+
+    if sketch is not None:
+        drawn = _read_mask_sketch(sketch, spatial_reference, fallback_sr,
+                                  densify_step, messenger)
+        n_sketch = len(drawn)
+        geoms.extend(drawn)
+        if n_sketch:
+            notes.append(f"{n_sketch} drawn")
+        elif layer is None:
+            if messenger:
+                messenger.warn(
+                    "The sampling mask sketch has no finished polygon (double-click to "
+                    "finish drawing one), so the run is not masked.")
+            return None
+
+    if not geoms:
+        return None
+
+    union = _union_all(geoms)
+    extent = arcpy.Extent(*clip_box) if clip_box is not None else union.extent
+    clipped = union.clip(extent)
+    rings = (_polygon_rings(clipped)
+             if clipped is not None and clipped.partCount else [])
+    verb = "keep only inside" if mode == "keep" else "exclude inside"
+    description = f"{verb} {len(geoms)} polygon(s) ({', '.join(notes)})"
+    return MaskInput(geometry=clipped, sample_mask=SampleMask(rings, mode), mode=mode,
+                     n_layer=n_layer, n_sketch=n_sketch, description=description)
+
+
+def _has_parts(geom) -> bool:
+    """Whether an arcpy geometry has anything in it.
+
+    Never test a geometry for truthiness: ``Geometry.__len__`` is its part
+    count, so an empty clip result is falsy and so is ``None``, and ``or``
+    between geometries silently picks the wrong one.
+    """
+    return geom is not None and geom.partCount > 0
+
+
+def mask_coverage(ring, sr, mask_input):
+    """``(percent kept, kept piece or None)`` for one swath band.
+
+    Both halves come from the same two operators - ``intersect`` and
+    ``difference`` - and the percentage is ``kept / (inside + outside)``.  The
+    band's own area would be the wrong denominator where the band folds, because
+    the ring is stored as drawn and self-intersects there.  A mask that misses
+    or swallows the band is answered without either operation, and then the
+    kept piece is the band exactly as drawn.
+    """
+    import arcpy
+
+    band = arcpy.Polygon(arcpy.Array([arcpy.Point(float(x), float(y))
+                                      for x, y in ring]), sr)
+    keep = mask_input.mode == "keep"
+    mg = mask_input.geometry
+    if not _has_parts(mg) or mg.disjoint(band):
+        return (0.0, None) if keep else (100.0, band)
+    if mg.contains(band):
+        return (100.0, band) if keep else (0.0, None)
+    inside = band.intersect(mg, 4)
+    outside = band.difference(mg)
+    a_in = float(inside.area) if _has_parts(inside) else 0.0
+    a_out = float(outside.area) if _has_parts(outside) else 0.0
+    total = a_in + a_out
+    if total <= 0.0:
+        return 0.0, None
+    kept, a_kept = (inside, a_in) if keep else (outside, a_out)
+    return 100.0 * a_kept / total, (kept if a_kept > 0.0 else None)
+
+
+def clip_line(xy, sr, mask_input):
+    """The part of a polyline the mask keeps, or None if it keeps nothing."""
+    import arcpy
+
+    line = arcpy.Polyline(arcpy.Array([arcpy.Point(float(x), float(y))
+                                       for x, y in xy]), sr)
+    mg = mask_input.geometry
+    if not _has_parts(mg):
+        return None if mask_input.mode == "keep" else line
+    piece = line.intersect(mg, 2) if mask_input.mode == "keep" else line.difference(mg)
+    if not _has_parts(piece) or not piece.length > 0.0:
+        return None
+    return piece
+
+
+# ---------------------------------------------------------------------------
 # Writers
 # ---------------------------------------------------------------------------
 
@@ -422,7 +681,11 @@ def _finalise_fc(fc, out_path, via_memory=True):
 
 
 def write_band_polygons(out_path, rings, sr, messenger=None):
-    """Write one polygon per baseline part: the region actually sampled."""
+    """Write one polygon per baseline part: the region actually sampled.
+
+    A record may carry a precomputed ``"shape"`` (the band already clipped to a
+    sampling mask); otherwise the polygon is built from its ``"ring"``.
+    """
     import arcpy
 
     fc, via_memory = _create(out_path, "POLYGON", sr, [
@@ -435,12 +698,16 @@ def write_band_polygons(out_path, rings, sr, messenger=None):
                                     "SWATH_W", "STEP", "N_LINES", "N_STATION",
                                     "METHOD"]) as cur:
         for r in rings:
-            arr = arcpy.Array([arcpy.Point(float(x), float(y)) for x, y in r["ring"]])
-            cur.insertRow([arcpy.Polygon(arr, sr), r["oid"], r["part_id"],
+            shape = r.get("shape")
+            if shape is None:
+                arr = arcpy.Array([arcpy.Point(float(x), float(y)) for x, y in r["ring"]])
+                shape = arcpy.Polygon(arr, sr)
+            cur.insertRow([shape, r["oid"], r["part_id"],
                            str(r.get("name", ""))[:64], r["width"], r["step"],
                            r["n_lines"], r["n_stations"], r["method"]])
     # The sampled ring self-intersects wherever the band folds; that is real and
-    # deliberate, and the geodatabase accepts it as drawn.
+    # deliberate, and the geodatabase accepts it as drawn.  (A band clipped to a
+    # sampling mask has been through a topological operation and is simplified.)
     fc = _finalise_fc(fc, out_path, via_memory)
     if messenger:
         messenger.info(f"  Swath band polygons -> {out_path}")
@@ -456,6 +723,9 @@ def write_offset_lines(out_path, lines, sr, messenger=None):
     signed ``OFFSET`` because Pro's unique-value renderer needs a categorical
     field, and because a definition query on ``SIDE = 'Left'`` cannot make the
     ``>`` / ``>=`` mistake at the centre line.
+
+    A record may carry a precomputed ``"shape"`` (the line already clipped to a
+    sampling mask); otherwise the polyline is built from its ``"xy"``.
     """
     import arcpy
 
@@ -470,9 +740,12 @@ def write_offset_lines(out_path, lines, sr, messenger=None):
                                     "LINE_IDX", "OFFSET", "N_VALID",
                                     "SIDE"]) as cur:
         for ln in lines:
-            arr = arcpy.Array([arcpy.Point(float(x), float(y)) for x, y in ln["xy"]])
+            shape = ln.get("shape")
+            if shape is None:
+                arr = arcpy.Array([arcpy.Point(float(x), float(y)) for x, y in ln["xy"]])
+                shape = arcpy.Polyline(arr, sr)
             side = SIDE_NAMES[int(side_of([ln["offset"]])[0])]
-            cur.insertRow([arcpy.Polyline(arr, sr), ln["oid"], ln["part_id"],
+            cur.insertRow([shape, ln["oid"], ln["part_id"],
                            str(ln.get("name", ""))[:64], ln["index"], ln["offset"],
                            ln["n_valid"], side])
     fc = _finalise_fc(fc, out_path, via_memory)

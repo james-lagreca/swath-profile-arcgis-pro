@@ -24,6 +24,7 @@ sys.path.insert(0, ROOT)
 import arcpy  # noqa: E402
 
 from swathprofile import plotting                      # noqa: E402
+from swathprofile.errors import SwathError              # noqa: E402
 from swathprofile.messaging import CollectingMessenger  # noqa: E402
 
 from . import synth_arcpy as synth  # noqa: E402
@@ -225,6 +226,155 @@ class ToolEndToEndTest(unittest.TestCase):
         tool.execute(params, None)
         self.assertFalse(seen["add"])
         self.assertEqual(arcpy.env.addOutputsToMap, before)     # restored
+
+    # -- sampling mask --------------------------------------------------------
+
+    LX = X0 + 2000.0                     # a cell edge: no cell centre on the line
+
+    def _ns_line(self, name):
+        """A baseline drawn northwards; its left (positive offsets) is west."""
+        return synth.write_line([(self.LX, Y0 + 400.0), (self.LX, Y0 + 2600.0)],
+                                self.gdb, name)
+
+    def _east(self, name, y0=Y0 - 100.0, y1=Y0 + 3100.0):
+        return synth.write_polygons([synth.rect_wkt(self.LX + 3.0, y0,
+                                                    self.LX + 400.0, y1)],
+                                    self.gdb, name)
+
+    def _outputs(self, pr, stem):
+        for name in ("out_table", "out_band", "out_stations", "out_offset_lines",
+                     "out_summary"):
+            pr[name].value = os.path.join(self.out_gdb, f"{stem}_{name}")
+        return lambda name: os.path.join(self.out_gdb, f"{stem}_{name}")
+
+    def _ready(self, tool, params):
+        tool.updateParameters(params)
+        tool.updateMessages(params)
+        self.assertFalse(any(p.hasError() for p in params),
+                         [(p.name, p.message) for p in params if p.hasError()])
+
+    def test_keep_mask_from_a_layer(self):
+        tool, params, pr = self._params()
+        pr["in_lines"].value = self._ns_line("mk_line")
+        pr["mask_layer"].value = self._east("mk_poly")
+        out = self._outputs(pr, "mk")
+        self._ready(tool, params)
+        self.assertTrue(pr["mask_mode"].enabled)
+        msg = CollectingMessenger()
+        tool._run(params, msg)
+
+        # 51 lines 6 m apart; east of LX + 3 are the 25 at offsets -6 ... -150.
+        n_valid = [r[0] for r in arcpy.da.SearchCursor(out("out_table"), ["N_VALID"])]
+        self.assertTrue(n_valid and all(v == 25 for v in n_valid))
+        kept, params_json = next(arcpy.da.SearchCursor(out("out_summary"),
+                                                       ["MASK_KEPT", "PARAMS"]))
+        self.assertAlmostEqual(kept, 100.0 * 147.0 / 300.0, places=3)
+        self.assertIn('"mask_mode": "keep"', params_json)
+        area = sum(r[0] for r in arcpy.da.SearchCursor(out("out_band"), ["SHAPE@AREA"]))
+        self.assertAlmostEqual(area, 147.0 * 2200.0, delta=1.0)
+        offsets = [r[0] for r in arcpy.da.SearchCursor(out("out_offset_lines"),
+                                                       ["OFFSET"])]
+        self.assertEqual(len(offsets), 25)
+        self.assertTrue(all(o < 0 for o in offsets))
+        self.assertTrue(any("Sampling mask keeps 49%" in m for m in msg.infos))
+        self.assertTrue(any("Minimum Valid Samples" in m for m in msg.infos))
+
+    def test_exclude_mask_cuts_lines_part_way(self):
+        tool, params, pr = self._params()
+        pr["in_lines"].value = self._ns_line("mx_line")
+        pr["mask_layer"].value = self._east("mx_poly", y0=Y0 + 100.0, y1=Y0 + 1500.0)
+        pr["mask_mode"].value = "Exclude inside"
+        out = self._outputs(pr, "mx")
+        self._ready(tool, params)
+        tool._run(params, CollectingMessenger())
+
+        n_stations = sum(1 for _ in arcpy.da.SearchCursor(out("out_table"), ["OID@"]))
+        rows = list(arcpy.da.SearchCursor(out("out_offset_lines"),
+                                          ["OFFSET", "N_VALID", "SHAPE@"]))
+        self.assertEqual(len(rows), 51)            # every line keeps something
+        for offset, n_valid, shape in rows:
+            if offset < 0:                         # east: cut where the mask ends
+                self.assertAlmostEqual(shape.extent.YMin, Y0 + 1500.0, places=3)
+                self.assertLess(n_valid, n_stations)
+            else:                                  # west: untouched
+                self.assertAlmostEqual(shape.extent.YMin, Y0 + 400.0, places=3)
+                self.assertEqual(n_valid, n_stations)
+
+    def test_an_unfinished_mask_sketch_is_ignored_with_a_warning(self):
+        """Outside Pro a sketch parameter keeps only the schema of what it is
+        given - exactly the state of a sketch the user has started but not
+        finished.  Reading a sketch that holds polygons is tested directly in
+        test_end_to_end.test_read_mask_from_a_dialog_sketch."""
+        tool, params, pr = self._params()
+        pr["in_lines"].value = self._ns_line("me_line")
+        fs = arcpy.FeatureSet()
+        fs.load(self._east("me_poly"))
+        pr["mask_draw"].value = fs
+        out = self._outputs(pr, "me")
+        tool.updateParameters(params)
+        tool.updateMessages(params)
+        self.assertTrue(pr["mask_draw"].hasWarning())
+        self.assertIn("double-click", pr["mask_draw"].message)
+        msg = CollectingMessenger()
+        tool._run(params, msg)
+        self.assertTrue(any("not masked" in w for w in msg.warnings))
+        n_valid = [r[0] for r in arcpy.da.SearchCursor(out("out_table"), ["N_VALID"])]
+        self.assertTrue(all(v == 51 for v in n_valid))
+        kept = next(arcpy.da.SearchCursor(out("out_summary"), ["MASK_KEPT"]))[0]
+        self.assertIsNone(kept)
+
+    def test_a_keep_mask_that_misses_every_swath_stops_the_run(self):
+        tool, params, pr = self._params()
+        pr["in_lines"].value = self._ns_line("mf_line")
+        pr["mask_layer"].value = synth.write_polygons(
+            [synth.rect_wkt(X0 + 10, Y0 + 10, X0 + 100, Y0 + 100)], self.gdb, "mf_poly")
+        out = self._outputs(pr, "mf")
+        self._ready(tool, params)
+        with self.assertRaises(SwathError) as ctx:
+            tool._run(params, CollectingMessenger())
+        self.assertIn("does not overlap any swath", str(ctx.exception))
+        self.assertFalse(arcpy.Exists(out("out_table")))
+
+    def test_zonal_keep_mask_halves_the_cells(self):
+        def run(stem, mask):
+            tool, params, pr = self._params()
+            pr["in_lines"].value = self._ns_line(f"{stem}_line")
+            pr["method"].value = "All cells (exact envelope)"
+            if mask:
+                pr["mask_layer"].value = self._east(f"{stem}_poly")
+            out = self._outputs(pr, stem)
+            self._ready(tool, params)
+            tool._run(params, CollectingMessenger())
+            return out, np.array([r[0] for r in arcpy.da.SearchCursor(
+                out("out_table"), ["N_VALID"])])
+
+        _, full = run("mz0", False)
+        out, half = run("mz1", True)
+        inner = slice(3, -3)
+        np.testing.assert_array_equal(half[inner] * 2, full[inner])
+        kept = next(arcpy.da.SearchCursor(out("out_summary"), ["MASK_KEPT"]))[0]
+        self.assertAlmostEqual(kept, 49.0, places=3)
+
+    def test_transects_with_their_own_width_carry_the_mask(self):
+        tool, params, pr = self._params()
+        pr["transect_source"].value = self.trace
+        pr["transect_spacing"].value = "700 Meters"
+        pr["transect_length"].value = "1200 Meters"
+        pr["transect_width"].value = "120 Meters"
+        # Keep only the northern half of the transects (the trace runs E-W).
+        pr["mask_layer"].value = synth.write_polygons(
+            [synth.rect_wkt(X0, Y0 + 1500.0, X0 + 4000.0, Y0 + 3000.0)], self.gdb,
+            "mt_poly")
+        out = self._outputs(pr, "mt")
+        self._ready(tool, params)
+        tool._run(params, CollectingMessenger())
+        rows = list(arcpy.da.SearchCursor(out("out_summary"),
+                                          ["SWATH_W", "MASK_KEPT", "PARAMS"]))
+        self.assertEqual(len(rows), 5)
+        for width, kept, params_json in rows:
+            self.assertAlmostEqual(width, 120.0)
+            self.assertAlmostEqual(kept, 50.0, places=3)
+            self.assertIn('"mask_mode": "keep"', params_json)
 
 
 if __name__ == "__main__":

@@ -78,6 +78,9 @@ SUMMARY_FIELDS = [
     ("MIN_RADIUS", "DOUBLE", None),
     ("PCT_NODATA", "DOUBLE", None),
     ("N_FOLDED", "LONG", None),
+    # Percent of the swath band's area the sampling mask kept; Null without a
+    # mask.  PCT_NODATA counts masked samples as missing, as it does folded ones.
+    ("MASK_KEPT", "DOUBLE", None),
     ("METHOD", "TEXT", 32),
     ("CRS_NAME", "TEXT", 128),
     ("TOOL_VER", "TEXT", 32),
@@ -279,7 +282,8 @@ def write_summary_table(path, result, messenger=None):
                 _null(np.nanmean(s.thi) if np.isfinite(s.thi).any() else np.nan),
                 _null(min_radius),
                 _null(100.0 * missing / total if total else np.nan),
-                n_folded, cfg.method, crs_name, cfg.tool_version,
+                n_folded, _null(g.get("mask_kept")), cfg.method, crs_name,
+                cfg.tool_version,
                 run_utc, _null(result.elapsed), params,
             ))
     write_table(path, SUMMARY_FIELDS, rows, messenger)

@@ -74,6 +74,8 @@ def save_bundle(path, result, title="", elapsed=None):
                         # raster: it is a property of the line, not the DEM.
                         "normal_bearing": _finite(g.get("normal_bearing")),
                         "normal_resultant": _finite(g.get("normal_resultant")),
+                        # Percent of the band the sampling mask kept, or null.
+                        "mask_kept": _finite(g.get("mask_kept")),
                         "rasters": rasters})
 
     cfg = json.loads(result.config.to_json()) if result.config else {}
@@ -147,6 +149,8 @@ def load_bundle(path):
                 "width": entry.get("width") or meta.get("config", {}).get("swath_width"),
                 "n_lines": entry.get("n_lines") or meta.get("config", {}).get("n_lines"),
                 "method": entry.get("method") or meta.get("config", {}).get("method"),
+                # Older bundles have no mask: None, the same as an unmasked run.
+                "mask_kept": entry.get("mask_kept"),
                 "centreline": z[f"g{i}_centreline"], "kappa": z[f"g{i}_kappa"],
                 "by_raster": by_raster,
             })

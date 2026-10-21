@@ -45,17 +45,20 @@ from . import geometry as geom
 from .raster_io import read_block, window_for_bbox
 from .sampling import world_to_index
 
-__all__ = ["group_stats", "zonal_profile"]
+__all__ = ["group_stats", "zonal_profile", "empty_result", "STAT_KEYS"]
 
 _KEYS = ("z_min", "z_max", "z_mean", "z_median", "z_q1", "z_q3", "z_std",
          "z_plo", "z_phi")
+#: The per-station statistics a zonal result carries (besides n_valid).
+STAT_KEYS = _KEYS
 
 #: Upper bound on cells handled per block; the distance transform and its
 #: index arrays cost ~25 bytes per cell.
 _FAST_BLOCK_CAP = 12_000_000
 
 
-def _empty(m):
+def empty_result(m):
+    """A zonal result for *m* stations with no data: what a wholly masked part gets."""
     out = {k: np.full(m, np.nan, dtype=np.float64) for k in _KEYS}
     out["n_valid"] = np.zeros(m, dtype=np.int64)
     out["n_folded"] = 0
@@ -75,7 +78,7 @@ def group_stats(grp, vals, n_groups, pct=(5.0, 95.0)):
     """
     grp = np.asarray(grp, dtype=np.int64)
     vals = np.asarray(vals, dtype=np.float64)
-    out = _empty(n_groups)
+    out = empty_result(n_groups)
     if vals.size == 0:
         return out
 
@@ -125,7 +128,7 @@ def group_stats(grp, vals, n_groups, pct=(5.0, 95.0)):
 def zonal_profile(raster, info, centres, tangents, across, step_local, *,
                   kappa=None, half_width_work=None, mask_folds=True,
                   max_block_cells: int = 40_000_000, messenger=None,
-                  pct=(5.0, 95.0), progress_cb=None):
+                  pct=(5.0, 95.0), progress_cb=None, cell_mask=None):
     """Per-station statistics from every cell in the band.
 
     All geometry is in the **raster's** CRS:
@@ -141,6 +144,12 @@ def zonal_profile(raster, info, centres, tangents, across, step_local, *,
     ``kappa`` (per station, in *working* units) and ``half_width_work`` (the
     scalar half-width in working units) drive the same fold test the offset
     mode uses; pass ``mask_folds=False`` to keep folded cells.
+
+    ``cell_mask`` is an optional :class:`~swathprofile.mask.SampleMask` **in the
+    raster's CRS**.  A cell whose centre it drops never becomes a candidate, so
+    it counts in neither ``n_valid`` nor the fold count; the assignment of the
+    cells that remain is unchanged, because it depends only on the station
+    positions.  In keep mode a block the mask cannot reach is not even read.
     """
     from scipy.ndimage import distance_transform_edt
 
@@ -149,7 +158,7 @@ def zonal_profile(raster, info, centres, tangents, across, step_local, *,
     across = np.ascontiguousarray(across, dtype=np.float64)
     step_local = np.asarray(step_local, dtype=np.float64)
     m = len(centres)
-    out = _empty(m)
+    out = empty_result(m)
     if m < 2:
         return out
 
@@ -208,9 +217,17 @@ def zonal_profile(raster, info, centres, tangents, across, step_local, *,
             process(j0, mid)
             process(mid, j1)
             return
+        if cell_mask is not None:
+            bx0 = info.x_min + win[0] * info.cell_w
+            by1 = info.y_max - win[1] * info.cell_h
+            if cell_mask.drops_all_in_box(bx0, by1 - win[3] * info.cell_h,
+                                          bx0 + win[2] * info.cell_w, by1,
+                                          pad=cell_diag):
+                return                      # nothing here could be kept: skip the read
 
         block, grid = read_block(raster, info, win)
         n_rows, n_cols = block.shape
+        dropped = cell_mask.drops_cells(grid) if cell_mask is not None else None
 
         fr, fc = world_to_index(grid, centres[:, 0], centres[:, 1])
         row = np.floor(fr + 0.5).astype(np.int64)
@@ -230,11 +247,15 @@ def zonal_profile(raster, info, centres, tangents, across, step_local, *,
         cand = ((dist <= hw_max + cell_diag) & np.isfinite(block) &
                 (j_hat >= j0 - k_coarse) & (j_hat < j1 + k_coarse))
         del dist
+        if dropped is not None:
+            cand &= ~dropped
+            del dropped
         rows, cols = np.nonzero(cand)
         del cand
         if rows.size == 0:
             return
 
+        # Anchored on the raster origin, so identical in every tiling.
         xs, ys = grid.cell_centres()
         px, py = xs[cols], ys[rows]
         jh = j_hat[rows, cols].astype(np.int64)
@@ -293,8 +314,10 @@ def zonal_profile(raster, info, centres, tangents, across, step_local, *,
     if messenger is not None:
         empty = int(np.count_nonzero(out["n_valid"] == 0))
         if empty:
+            why = (" (outside the sampling mask, outside the raster, or NoData)"
+                   if cell_mask is not None else "")
             messenger.info(
-                f"  {info.name}: {empty} of {m} stations received no valid cells.")
+                f"  {info.name}: {empty} of {m} stations received no valid cells{why}.")
         if n_folded:
             messenger.info(
                 f"  {info.name}: {n_folded:,} cells excluded where the band folds "

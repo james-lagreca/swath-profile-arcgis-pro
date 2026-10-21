@@ -7,6 +7,7 @@ Extracts swath profiles along one or more baselines: for every station along the
 - Lines and rasters may be in any coordinate system; the swath is computed in a projected working system (the first projected raster's, else the baseline's, else a UTM zone) and samples are transformed into each raster's own system.
 - Leave the chart window open between runs: each run adds its profiles to the window's list so you can compare them.
 - For high-resolution DEMs or wide bands, choose the All cells sampling method: offset lines skip most of the cells in the band and the tool will tell you what fraction.
+- To measure one surface only - a fan, not the bedrock beside it - draw or choose a Sampling Mask. Everything outside it (or inside it, in Exclude mode) is left out of the statistics, and the band and offset lines on the map are cut to match.
 
 ## Main
 
@@ -95,6 +96,34 @@ Whether transects straddle the trace or extend to one side only.
 Distance along the trace at which the first transect is placed.
 
 Use it to align transects with a reference point on the trace.
+
+## Sampling mask
+
+### Draw Sampling Mask on Map  
+`mask_draw` · optional
+
+Draw a polygon on the map to limit where the swath samples.
+
+Use it to measure one surface only: outline an alluvial fan so the bedrock a corner of the band runs onto is left out, or, with Mask Mode 'Exclude inside', draw round just the part to leave out. Click the sketch tool beside this parameter, click round the area and double-click to finish. Several polygons may be drawn, and a Sampling Mask Layer may be used as well; everything is merged into one mask.
+
+Samples and cells the mask removes count as missing, exactly like NoData, so they never enter any statistic or the smoothing. The swath band and the offset lines on the map are cut to what was actually sampled, and the run reports how much of each band the mask kept (MASK_KEPT in the summary). Masking changes the relief a station sees, so it changes HI and THi too: that is the point of measuring one surface.
+
+### ...or Sampling Mask Layer  
+`mask_layer` · optional
+
+Existing polygon features to use as the sampling mask.
+
+For example mapped fan or terrace units. Any polygon layer, in any coordinate system; if features are selected on the map, only the selection is used. Overlapping polygons are merged, and holes in a polygon are honoured.
+
+### Mask Mode  
+`mask_mode` · optional
+
+Whether the mask keeps what is inside it or removes it.
+
+Offset lines: a sample is kept or removed by its own position. One just inside the boundary may still be interpolated from cells up to about one cell beyond it, which is far finer than a drawn boundary. All cells: a cell counts only if its centre is inside, a strict cell-level cut.
+
+- Keep only inside - sample only within the polygons (default).
+- Exclude inside - sample everywhere except within the polygons.
 
 ## Sampling
 
@@ -217,7 +246,9 @@ A flat cross-section has no hypsometry, so Null is the honest answer.
 
 Minimum number of valid samples for a station to be reported.
 
-Stations with fewer valid samples (NoData, outside the raster, or masked folds) get Null statistics. Default 1.
+Stations with fewer valid samples (NoData, outside the raster, masked folds, or removed by the sampling mask) get Null statistics. Default 1. Applies to both sampling methods; in All cells mode it counts cells.
+
+With a sampling mask, raise it to leave out stations at the edge of the mask that keep only a sliver of the band, whose statistics describe a much narrower swath than the rest.
 
 ## Outputs
 
@@ -227,6 +258,8 @@ Stations with fewer valid samples (NoData, outside the raster, or masked folds) 
 Polygon of the band actually sampled, one feature per baseline.
 
 Added to the map with a transparent fill so you can see what was measured. It self-intersects wherever the band folds; that is deliberate.
+
+With a sampling mask it is cut to the area the mask kept, and a profile the mask removed entirely has no band.
 
 ### Station Points (chart linked to map)  
 `out_stations` · optional
@@ -251,6 +284,8 @@ One feature per line with its signed OFFSET (positive to the left of the digitis
 
 SIDE holds Left, Right or Centre, and the layer is symbolised on it in the same colours the chart uses, so the two can be read together.
 
+With a sampling mask, each line is cut to the stretch the mask kept, and a line it removed entirely is left out.
+
 ### 3D Profile Lines (Z-enabled)  
 `out_profiles_3d` · optional
 
@@ -264,6 +299,8 @@ For 3D scenes and CAD export. Lines are split into parts at NoData gaps rather t
 One row per baseline and raster with run-level values and provenance.
 
 Includes lengths, station counts, the percentile pair, maximum relief, mean HI and THi, minimum radius of curvature, NoData fraction, elapsed time and a JSON blob of every parameter so a result can be reproduced later.
+
+MASK_KEPT is the percentage of the swath band's area the sampling mask kept (Null without a mask). PCT_NODATA counts samples removed by the mask as missing, as it already does folded ones.
 
 ### CSV Folder  
 `out_csv_folder` · optional

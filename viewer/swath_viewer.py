@@ -67,6 +67,33 @@ DETREND_MODES = ["None", "Linear detrend", "Relative to minimum"]
 #: far out across the swath a profile sits is readable as well.
 PROFILE_COLOUR = {"Single colour": "single", "Side of line": "side",
                   "Side + distance": "ramp"}
+
+
+def _mask_words(mode) -> str:
+    return {"keep": "keep only inside", "exclude": "exclude inside"}.get(mode, str(mode))
+
+
+def _stats_settings(config) -> dict:
+    """The run's statistics settings, as compute_stats keyword arguments.
+
+    Re-smoothing in the viewer re-reduces the raw sample lines, and it must use
+    the settings the tool used: without Minimum Valid Samples, for one, the
+    slivers a run left out at the edge of a sampling mask would come back the
+    moment a smoothing preset is chosen.  Older bundles lack some keys and get
+    compute_stats' own defaults, which are the tool's defaults.
+    """
+    cfg = config or {}
+    out = {}
+    for key, name, cast in (("min_valid", "min_valid", int),
+                            ("legacy_stats", "legacy", bool),
+                            ("flat_hi", "flat_hi", str),
+                            ("thi_clip_factor", "thi_clip_factor", bool),
+                            ("thi_clip_range", "thi_clip_range", bool),
+                            ("quantile_method", "quantile_method", str),
+                            ("smooth_dilate", "smooth_dilate", bool)):
+        if cfg.get(key) is not None:
+            out[name] = cast(cfg[key])
+    return out
 STACK_SERIES = {"Mean": "z_mean", "Baseline": "z_centre", "Min": "z_min",
                 "Max": "z_max", "Median": "z_median"}
 STACK_ALIGN = {"Own minimum": "min", "Own mean": "mean", "Absolute": "none"}
@@ -544,7 +571,8 @@ class SwathViewer(tk.Tk):
                 if window and s.values is not None:
                     st = compute_stats(s.values, s.distances, offsets=s.offsets,
                                        name=name, smooth_window=window,
-                                       pct_low=e.pct[0], pct_high=e.pct[1])
+                                       pct_low=e.pct[0], pct_high=e.pct[1],
+                                       **_stats_settings(e.meta.get("config")))
                 if mode == "Linear detrend":
                     st = transforms.detrend_linear(st)
                 elif mode == "Relative to minimum":
@@ -699,6 +727,8 @@ class SwathViewer(tk.Tk):
                 xs = {"unavailable": True}
         footer = (f"width {cfg.get('swath_width', '?')} | step {cfg.get('step', '?')}"
                   f" | {cfg.get('n_lines', '?')} profiles | {cfg.get('method', '?')}"
+                  + (f" | mask: {_mask_words(cfg.get('mask_mode'))}"
+                     if cfg.get("mask_mode") else "")
                   + (f" | {self.detrend_box.get().lower()}"
                      if self.detrend_box.get() != "None" else ""))
         _, axes = plotting.build_figure(
@@ -725,7 +755,17 @@ class SwathViewer(tk.Tk):
             f"P{e.pct[0]:g}/P{e.pct[1]:g}\n"
             f"CRS: {e.meta.get('crs', '')}"
             + self._side_note(stats, e.flip)
+            + self._mask_note(e, cfg)
             + (f"\nRun time {elapsed:.1f} s" if elapsed else ""))
+
+    @staticmethod
+    def _mask_note(e, cfg) -> str:
+        """One info line naming the sampling mask and how much of the band it kept."""
+        if not cfg.get("mask_mode"):
+            return ""
+        kept = e.part.get("mask_kept")
+        share = f", {kept:.0f}% of band kept" if kept is not None else ""
+        return f"\nMask: {_mask_words(cfg.get('mask_mode'))}{share}"
 
     def _draw_overlays_single(self, e, stats, d):
         """Pinned-station marker and measurement annotations, after build_figure."""

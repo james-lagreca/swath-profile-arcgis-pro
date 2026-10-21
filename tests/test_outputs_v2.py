@@ -168,8 +168,13 @@ class OutputsV2Test(unittest.TestCase):
         for expected in ("draw_lines", "label_field", "transect_source",
                          "transect_spacing", "pct_low", "pct_high", "out_stations",
                          "out_transects", "chart_preset", "add_to_map",
-                         "transect_width"):
+                         "transect_width", "mask_draw", "mask_layer", "mask_mode"):
             self.assertIn(expected, names)
+        # The mask parameters sit together, so they form one dialog category.
+        cats = [p.category for p in params if p.name.startswith("mask_")]
+        self.assertEqual(cats, ["Sampling mask"] * 3)
+        mode = next(p for p in params if p.name == "mask_mode")
+        self.assertEqual(mode.value, "Keep only inside")
         method = next(p for p in params if p.name == "method")
         self.assertEqual(method.parameterType, "Required")
         tool.updateParameters(params)
@@ -204,6 +209,37 @@ class OutputsV2Test(unittest.TestCase):
             self.assertEqual(geometries, ["polyline"])
         self.assertFalse(arcpy.Exists("memory/swath_baseline_template"),
                          "the dialog must not leave a template in the memory workspace")
+
+    def test_mask_sketch_is_identical_on_every_dialog_open(self):
+        """The mask sketch follows the draw_lines rules: no value, polygon filter."""
+        module = SourceFileLoader("swpyt_test4", os.path.join(ROOT, "SwathProfile.pyt")
+                                  ).load_module()
+        seen = []
+        for overwrite in (False, True, False):
+            arcpy.env.overwriteOutput = overwrite
+            draw = next(p for p in module.SwathProfileTool().getParameterInfo()
+                        if p.name == "mask_draw")
+            seen.append((draw.value, [str(g).lower() for g in draw.filter.list]))
+        arcpy.env.overwriteOutput = True
+        self.assertEqual(len(set(map(str, seen))), 1, f"sketch differs by open: {seen}")
+        for value, geometries in seen:
+            self.assertIsNone(value)
+            self.assertEqual(geometries, ["polygon"])
+
+    def test_a_line_drawn_as_the_mask_is_rejected(self):
+        module = SourceFileLoader("swpyt_test5", os.path.join(ROOT, "SwathProfile.pyt")
+                                  ).load_module()
+        tool = module.SwathProfileTool()
+        params = tool.getParameterInfo()
+        pr = {p.name: p for p in params}
+        fs = arcpy.FeatureSet()
+        fs.load(self.line_fc)                    # a polyline where a polygon belongs
+        pr["mask_draw"].value = fs
+        tool.updateParameters(params)
+        tool.updateMessages(params)
+        self.assertTrue(pr["mask_draw"].hasError())
+        self.assertIn("not a polygon", pr["mask_draw"].message)
+        self.assertTrue(pr["mask_mode"].enabled)
 
 
 if __name__ == "__main__":

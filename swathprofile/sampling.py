@@ -89,9 +89,23 @@ class GridSpec:
         return self.x_min_edge, self.y_min_edge
 
     def cell_centres(self):
-        """(xs, ys) 1-D arrays of cell-centre coordinates."""
-        xs = self.x_min_edge + (np.arange(self.n_cols) + 0.5) * self.cell_w
-        ys = self.y_max_edge - (np.arange(self.n_rows) + 0.5) * self.cell_h
+        """(xs, ys) 1-D arrays of cell-centre coordinates.
+
+        Computed from the **source raster's** origin and the integer block
+        offset, the inverse of :func:`world_to_index`, so a cell's centre is the
+        same float64 whichever block it was read in.  ``(g + 0.5)`` is exact for
+        any global index ``g``, leaving one rounding in the multiply and one in
+        the add, both fixed by the raster alone.
+
+        Building the centres from the block's own origin instead rounds twice
+        through a large coordinate, and on a fractional grid (a 0.3 m LiDAR
+        tile, say) about one centre in five then differs in the last bit
+        between tilings - enough to make All-cells statistics, and the cells a
+        sampling mask keeps, depend on the block size.  A block that is its own
+        reference (the default) gets exactly the old values.
+        """
+        xs = self.ref_x + (np.arange(self.n_cols) + (self.col_offset + 0.5)) * self.cell_w
+        ys = self.ref_y - (np.arange(self.n_rows) + (self.row_offset + 0.5)) * self.cell_h
         return xs, ys
 
 
