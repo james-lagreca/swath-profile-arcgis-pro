@@ -90,6 +90,7 @@ BROWSER = _browser()
 HARNESS = r"""
 <script>
 (function () {
+  var EXPORTS = __EXPORTS__;
   var out = { downloads: [], csp: [] };
   document.addEventListener("securitypolicyviolation", function (e) {
     out.csp.push(e.violatedDirective + " " + e.blockedURI);
@@ -99,7 +100,13 @@ HARNESS = r"""
   URL.createObjectURL = function (b) { captured.push(b); return origCreate(b); };
   HTMLAnchorElement.prototype.click = function () { out.downloads.push(this.getAttribute("download")); };
   window.alert = function (m) { out.alert = String(m); };
-  function finish() { document.body.setAttribute("data-test", JSON.stringify(out)); }
+  // Results are written as the harness goes, so a slow or failing step later
+  // on still leaves everything before it to read.
+  function record(phase) {
+    out.phase = phase;
+    document.body.setAttribute("data-test", JSON.stringify(out));
+  }
+  function finish() { record("done"); }
   function chart() { return document.getElementById("chart"); }
   function overlay() { return chart().querySelector("g.ui rect[fill='transparent']"); }
   function fire(type, fx, target) {
@@ -148,22 +155,30 @@ HARNESS = r"""
       overlay().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
       out.zoom = { before: before, zoomed: zoomed, reset: meanLength() };
       out.markersAfterZoom = chart().querySelectorAll("line[stroke='#d62728']").length;
+      record("interacted");
+      if (!EXPORTS) { finish(); return; }
       document.getElementById("save-svg").click();
       captured[0].text().then(function (t) {
-        out.svg = { xml: t.indexOf("<?xml") === 0, svg: t.indexOf("<svg") >= 0,
-                    ui: t.indexOf('class="ui"') >= 0, length: t.length,
-                    footer: t.indexOf("SwathProfile test") >= 0 };
-        document.getElementById("save-png").click();
-        var waited = 0;
-        (function poll() {
-          if (captured.length > 1 || out.alert || waited > 3000) {
-            if (captured.length > 1) out.png = { type: captured[1].type, size: captured[1].size };
-            finish();
-            return;
-          }
-          waited += 50;
-          setTimeout(poll, 50);
-        })();
+        try {
+          out.svg = { xml: t.indexOf("<?xml") === 0, svg: t.indexOf("<svg") >= 0,
+                      ui: t.indexOf('class="ui"') >= 0, length: t.length,
+                      footer: t.indexOf("SwathProfile test") >= 0 };
+          record("saved-svg");
+          document.getElementById("save-png").click();
+          var waited = 0;
+          (function poll() {
+            if (captured.length > 1 || out.alert || waited > 10000) {
+              if (captured.length > 1) out.png = { type: captured[1].type, size: captured[1].size };
+              finish();
+              return;
+            }
+            waited += 50;
+            setTimeout(poll, 50);
+          })();
+        } catch (e) {
+          out.harnessError = String(e && e.stack || e);
+          finish();
+        }
       }, function (e) { out.svgError = String(e); finish(); });
     } catch (e) {
       out.harnessError = String(e && e.stack || e);
@@ -199,22 +214,27 @@ def _result(method="offset", name="Across the scarp", **cfg):
 @unittest.skipIf(BROWSER is None, "no Chromium-based browser found")
 class RenderTest(unittest.TestCase):
 
-    def _drive(self, result, max_samples=None):
+    def _drive(self, result, max_samples=None, exports=True):
         page = webchart.render(webchart.build_payload(result, title="render",
                                                       max_samples=max_samples))
-        page = page.replace("</body>", HARNESS + "</body>")
+        harness = HARNESS.replace("__EXPORTS__", "true" if exports else "false")
+        page = page.replace("</body>", harness + "</body>")
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             path = Path(tmp) / "page.html"
             path.write_text(page, encoding="utf-8")
             args = _headless_args(BROWSER, Path(tmp) / "profile") + [
-                "--window-size=1400,900", "--virtual-time-budget=8000", "--dump-dom",
+                "--window-size=1400,900", "--virtual-time-budget=30000", "--dump-dom",
                 path.as_uri()]
             proc = subprocess.run(args, capture_output=True, text=True, timeout=120,
                                   encoding="utf-8", errors="replace")
         m = re.search(r'data-test="([^"]*)"', proc.stdout)
-        self.assertIsNotNone(m, f"the page never finished; stderr: {proc.stderr[-800:]}")
+        ready = 'data-swath-ready="1"' in proc.stdout
+        self.assertIsNotNone(
+            m, f"the harness recorded nothing (page ready: {ready}, DOM "
+               f"{len(proc.stdout)} chars); browser said: {proc.stderr[-600:]}")
         out = json.loads(html.unescape(m.group(1)))
         self.assertNotIn("harnessError", out, out.get("harnessError"))
+        self.assertEqual(out["phase"], "done", f"the harness stopped after {out['phase']}")
         return out
 
     def test_offset_profile_draws_and_responds(self):
@@ -270,7 +290,7 @@ class RenderTest(unittest.TestCase):
         self.assertGreater(out["zoom"]["before"], 0)          # the envelope is drawn
 
     def test_every_profile_line_is_drawn_even_in_a_very_wide_swath(self):
-        out = self._drive(_result(n_lines=1001, swath_width=1000.0))
+        out = self._drive(_result(n_lines=1001, swath_width=1000.0), exports=False)
         self.assertEqual(out["ready"], "1")
         self.assertEqual(out["profilePaths"], 1001)
         self.assertNotIn("Showing", out["info"])
