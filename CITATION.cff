@@ -8,7 +8,7 @@ license: GPL-3.0
 repository-code: "https://github.com/james-lagreca/swath-profile-arcgis-pro"
 url: "https://github.com/james-lagreca/swath-profile-arcgis-pro"
 authors:
-  - family-names: LaGreca
+  - family-names: La Greca
     given-names: James
 abstract: >-
   An ArcGIS Pro Python toolbox that extracts swath profiles along drawn or
